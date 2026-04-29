@@ -5,6 +5,7 @@ import random
 import hashlib
 import resend
 from datetime import datetime, timedelta, timezone
+import uuid
 
 load_dotenv()
 
@@ -50,13 +51,20 @@ def authenticate():
         return jsonify({"status": "user not found"}), 200
 
     # create new login attempt w user info 
-    if create_login_attempt(username, raw_data) == False:
+    login_attempt_id = create_login_attempt(supabase, username, raw_data)
+    if login_attempt_id == None:
         return jsonify({"status": "can't verify login"}), 200
 
     # get the score from ML engine 
     score = get_score(username, raw_data)
     if score == None:
         return jsonify({"status":"no score available"}), 200
+    
+    # STORE ML SCORE IN LOGIN ATTEMPT RECORD  # ADDED
+    supabase.table("login_attempts") \
+        .update({"confidence_score": score}) \
+        .eq("login_attempt_id", login_attempt_id) \
+        .execute()
     
     # get user's threshold 
     threshold_result = supabase.table("user_profiles") \
@@ -69,8 +77,14 @@ def authenticate():
     if (score >= threshold):
         return jsonify({"status": "accepted"}), 200
     else:
+        # MARK 2FA AS INVOKED FOR THIS LOGIN ATTEMPT  # ADDED
+        supabase.table("login_attempts") \
+            .update({"two_fa_invoked": True}) \
+            .eq("login_attempt_id", login_attempt_id) \
+            .execute()
+
         # send 2fa email 
-        send_code(username)
+        send_code(username, login_attempt_id)
 
         return jsonify({"status": "2fa required"}), 200
 
@@ -102,7 +116,7 @@ def code_verification():
     if not result.data:
         return jsonify({"status": "rejected"}), 200  
     
-    # check for non stale code 
+    # check for expiration
     entry = result.data[0]
     expires_at = entry.get("expires_at")
     
@@ -116,12 +130,56 @@ def code_verification():
         if now > expires_at:
             return jsonify({"status": "rejected", "message": "expired"}), 200
 
+    # get login attempt id 
+    login_attempt_id = entry["login_attempt_id"]
+    
+    # delete the login attempt from 2fa table so code isn't reusable 
+    supabase.table("_2fa").delete().eq("login_attempt_id", login_attempt_id).execute()
+
+    # mark the login attempt as successful 
+    supabase.table("login_attempts") \
+    .update({"successful_login": True}) \
+    .eq("login_attempt_id", login_attempt_id) \
+    .execute()
     return jsonify({"status": "accepted"}), 200
 
-# create new login attempt in DB, return successful/unsuccessful 
-def create_login_attempt(username, raw_data):
-    # filler 
-    return True
+# create new login attempt in DB, return login attempt id 
+def create_login_attempt(supabase, username, raw_data):
+    login_attempt_id = str(uuid.uuid4())
+     # 1. fetch profile
+    profile = (
+        supabase
+        .table("user_profiles")
+        .select("number_login_attempts")
+        .eq("username", username)
+        .single()
+        .execute()
+    )
+
+    current_count = profile.data["number_login_attempts"] or 0
+    login_number = current_count + 1
+
+    # 2. create login attempt row
+    new_attempt = {
+        "login_attempt_id": login_attempt_id, 
+        "username": username,
+        "login_number": login_number,
+        "two_fa_invoked": False,
+        "successful_login": None,
+        "confidence_score": None,
+        "raw_data": raw_data or {}
+    }
+
+    # 3. insert into login_attempts
+    supabase.table("login_attempts").insert(new_attempt).execute()
+
+    # 4. update user profile counter
+    supabase.table("user_profiles") \
+        .update({"number_login_attempts": login_number}) \
+        .eq("username", username) \
+        .execute()
+
+    return login_attempt_id
 
 # call ML engine and return the score given
 def get_score(username, raw_data):
@@ -129,7 +187,7 @@ def get_score(username, raw_data):
     return 0.69
 
 # generate otp hash, send code to user's email. 
-def send_code(username):
+def send_code(username, login_attempt_id):
     email_result = supabase.table("user_profiles") \
         .select("email") \
         .eq("username", username) \
@@ -143,6 +201,7 @@ def send_code(username):
     # insert the 2fa attempt 
     supabase.table("_2fa") \
         .insert({
+            "login_attempt_id": login_attempt_id,
             "username": username,
             "otp_hash": otp_hash,
             "expires_at": expires_at.isoformat()
