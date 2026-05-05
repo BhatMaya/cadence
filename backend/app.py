@@ -11,7 +11,13 @@ load_dotenv()
 
 from supabase import create_client
 
+try:
+    from .model_service import CadenceModelService
+except ImportError:
+    from model_service import CadenceModelService
+
 app = Flask(__name__)
+model_service = CadenceModelService()
 
 # start supabase client 
 supabase = create_client(
@@ -24,6 +30,11 @@ supabase = create_client(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/model/health")
+def model_health():
+    return jsonify(model_service.health())
 
 
 # MAIN ENDPOINT 1: client calls with username and raw data, gets accepted or sent to 2fa.  
@@ -56,7 +67,7 @@ def authenticate():
         return jsonify({"status": "can't verify login"}), 200
 
     # get the score from ML engine 
-    score = get_score(username, raw_data)
+    score = get_score(username, raw_data, login_attempt_id)
     if score == None:
         return jsonify({"status":"no score available"}), 200
     
@@ -182,9 +193,13 @@ def create_login_attempt(supabase, username, raw_data):
     return login_attempt_id
 
 # call ML engine and return the score given
-def get_score(username, raw_data):
-    # filler 
-    return 0.69
+def get_score(username, raw_data, login_attempt_id=None):
+    return model_service.score_login_attempt(
+        supabase,
+        username,
+        raw_data,
+        login_attempt_id=login_attempt_id,
+    )
 
 # generate otp hash, send code to user's email. 
 def send_code(username, login_attempt_id):

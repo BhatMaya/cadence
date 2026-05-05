@@ -1,0 +1,6 @@
+flask
+numpy
+python-dotenv
+resend
+supabase
+tensorflow==2.21.0

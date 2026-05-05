@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+datasets/cmu/*.csv
+datasets/cmu/features.json
