@@ -258,13 +258,12 @@ def code_verification():
     login_attempt_result = supabase.table("login_attempts") \
         .select("user_id") \
         .eq("login_attempt_id", login_attempt_id) \
-        .single() \
         .execute()
 
     if not login_attempt_result.data:
         return jsonify({"status": "rejected", "message": "invalid attempt"}), 200
 
-    user_id = login_attempt_result.data.get("user_id")
+    user_id = login_attempt_result.data[0].get("user_id")
 
     # query _2fa table by login_attempt_id (user_id also available for consistency check)
     result = supabase.table("_2fa") \
@@ -347,13 +346,12 @@ def resend_code():
     login_attempt_result = supabase.table("login_attempts") \
         .select("user_id") \
         .eq("login_attempt_id", login_attempt_id) \
-        .single() \
         .execute()
 
     if not login_attempt_result.data:
         return jsonify({"status": "invalid attempt"}), 200
 
-    user_id = login_attempt_result.data.get("user_id")
+    user_id = login_attempt_result.data[0].get("user_id")
 
     # find the pending 2fa attempt for this login
     result = supabase.table("_2fa") \
