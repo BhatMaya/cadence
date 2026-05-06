@@ -4,7 +4,7 @@ import { createCapture } from './vendor/index.js';
 const API_BASE =
   window.SYNERGYZE_API_BASE ||
   localStorage.getItem('synergyze.api_base') ||
-  'https://cadence-e4xl.onrender.com';
+  'http://localhost:5001';
 
 // ---------- routing ----------
 const VIEWS = ['landing', 'register', 'login', 'twofa', 'dashboard'];
@@ -88,6 +88,22 @@ function onViewChange(view) {
     teardownCapture();
   } else {
     teardownCapture();
+  }
+  if (view !== 'twofa') {
+    setDemoOtp(null);
+  }
+}
+
+function setDemoOtp(otp) {
+  const banner = document.getElementById('demo-banner');
+  const slot = document.getElementById('demo-otp');
+  if (!banner || !slot) return;
+  if (otp) {
+    slot.textContent = otp;
+    banner.hidden = false;
+  } else {
+    slot.textContent = '000000';
+    banner.hidden = true;
   }
 }
 
@@ -230,6 +246,7 @@ loginForm?.addEventListener('submit', async (ev) => {
       case '2fa required':
         pendingAuth.username = username;
         pendingAuth.loginAttemptId = json.login_attempt_id;
+        setDemoOtp(json.demo_otp || null);
         const reasonNote =
           json.reason === 'enrollment_required'
             ? `Enrollment in progress (${json.enrollment_count}/${json.enrollment_required}). Check your email for a code.`
@@ -343,6 +360,7 @@ document.getElementById('twofa-resend')?.addEventListener('click', async (ev) =>
       login_attempt_id: pendingAuth.loginAttemptId
     });
     if (json.status === 'code sent') {
+      setDemoOtp(json.demo_otp || null);
       setStatus(twofaForm, 'New code sent.', 'success');
     } else {
       setStatus(twofaForm, json.message || 'Could not resend.', 'error');

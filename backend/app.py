@@ -19,6 +19,11 @@ except ImportError:
 app = Flask(__name__)
 model_service = CadenceModelService()
 
+# Demo mode: skips the Resend email and returns the freshly-generated
+# OTP in the API response so testers without access to the inbox can
+# still complete 2FA. Never enable in production.
+DEMO_MODE = os.getenv("CADENCE_DEMO_MODE", "0").lower() in {"1", "true", "yes"}
+
 # CORS for the local dev frontend. Override with CADENCE_CORS_ORIGINS
 # (comma-separated) when deploying behind a different origin.
 _DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
@@ -49,25 +54,35 @@ REQUIRED_ENROLLMENT_SAMPLES = int(
     os.getenv("CADENCE_REQUIRED_ENROLLMENT_SAMPLES", "5")
 )
 
-# start supabase client
-# backend service key is used here for auth and data operations
-supabase = create_client(
-    os.getenv("SUPABASE_URL").strip(),
-    os.getenv("SUPABASE_KEY").strip()
-)
+# Two clients on purpose:
+#   `supabase`      → service-role, used for ALL table reads/writes.
+#   `supabase_auth` → service-role, used ONLY for auth.sign_up /
+#                     auth.sign_in_with_password. After a successful
+#                     sign-in the client's session switches to the
+#                     newly-authenticated user, putting subsequent DB
+#                     calls under that user's RLS context. Isolating
+#                     auth on a separate client keeps `supabase` in
+#                     service-role context for the rest of the request.
+SUPABASE_URL = os.getenv("SUPABASE_URL").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY").strip()
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def _supabase_sign_up(email, password):
-    auth = supabase.auth
-    # helper handles Supabase client method differences across versions
-    try:
-        return auth.sign_up({"email": email, "password": password})
-    except TypeError:
-        return auth.sign_up(email=email, password=password)
+    # Admin create skips the confirmation email Supabase would otherwise
+    # send — important because the project's free-tier email rate limit
+    # gets tripped quickly during demo signups. The created user is
+    # marked already-confirmed so they can immediately sign in.
+    return supabase.auth.admin.create_user({
+        "email": email,
+        "password": password,
+        "email_confirm": True,
+    })
 
 
 def _supabase_sign_in(email, password):
-    auth = supabase.auth
+    auth = supabase_auth.auth
     # helper handles Supabase sign in API differences
     try:
         return auth.sign_in_with_password({"email": email, "password": password})
@@ -105,14 +120,35 @@ def require_2fa(user_id, username, login_attempt_id, enrollment_count, reason):
         .eq("login_attempt_id", login_attempt_id) \
         .execute()
 
-    send_code(user_id, username, login_attempt_id)
+    # If sending the OTP fails (e.g. Resend rejects the recipient in
+    # test mode), roll back the pending state so the user can retry
+    # instead of getting wedged into "previous login still pending".
+    try:
+        otp = send_code(user_id, username, login_attempt_id)
+    except Exception as exc:
+        app.logger.exception("send_code failed; rolling back pending 2fa")
+        supabase.table("user_profiles") \
+            .update({"current_login_status": None}) \
+            .eq("user_id", user_id) \
+            .execute()
+        supabase.table("_2fa") \
+            .delete() \
+            .eq("login_attempt_id", login_attempt_id) \
+            .execute()
+        return jsonify({
+            "status": "error",
+            "message": f"could not send 2FA email: {exc}",
+        }), 502
 
-    return jsonify({
+    body = {
         "status": "2fa required",
         "login_attempt_id": login_attempt_id,
         "reason": reason,
         **enrollment_payload(enrollment_count),
-    }), 200
+    }
+    if DEMO_MODE:
+        body["demo_otp"] = otp
+    return jsonify(body), 200
 
 
 # health check endpoint 
@@ -481,9 +517,11 @@ def resend_code():
         .execute()
     email = email_result.data[0]["email"]
 
-    resend.api_key = os.getenv("RESEND_KEY")
+    if DEMO_MODE:
+        app.logger.warning("[DEMO_MODE] resent OTP for %s (%s): %s", username, email, otp)
+        return jsonify({"status": "code sent", "demo_otp": otp}), 200
 
-    # send email
+    resend.api_key = os.getenv("RESEND_KEY")
     resend.Emails.send({
         "from": "onboarding@resend.dev",
         "to": email,
@@ -541,7 +579,8 @@ def get_score(username, raw_data, login_attempt_id=None):
         login_attempt_id=login_attempt_id,
     )
 
-# generate otp hash, send code to user's email. 
+# generate otp hash, send code to user's email. Returns the plaintext
+# OTP so the caller can surface it in demo mode.
 def send_code(user_id, username, login_attempt_id):
     email_result = supabase.table("user_profiles") \
         .select("email") \
@@ -553,7 +592,7 @@ def send_code(user_id, username, login_attempt_id):
     otp_hash = hashlib.sha256(otp.encode()).hexdigest()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
 
-    # insert the 2fa attempt 
+    # insert the 2fa attempt
     supabase.table("_2fa") \
         .insert({
             "login_attempt_id": login_attempt_id,
@@ -565,14 +604,18 @@ def send_code(user_id, username, login_attempt_id):
         }) \
         .execute()
 
-    resend.api_key = os.getenv("RESEND_KEY")
+    if DEMO_MODE:
+        app.logger.warning("[DEMO_MODE] OTP for %s (%s): %s", username, email, otp)
+        return otp
 
+    resend.api_key = os.getenv("RESEND_KEY")
     resend.Emails.send({
         "from": "onboarding@resend.dev",  # default test sender
         "to": email,
         "subject": "Verification Code",
         "html": f"<p>Your one-time code is: {otp}</p>"
     })
+    return otp
 
     
 

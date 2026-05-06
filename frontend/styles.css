@@ -190,6 +190,12 @@ em {
 }
 
 /* ---------- routes ---------- */
+/* `[hidden]` must beat the more specific `.route-auth { display: grid }`
+ * below, otherwise hidden auth views still render on top of landing. */
+[hidden] {
+  display: none !important;
+}
+
 .route {
   padding: 80px max(24px, 6vw) 120px;
 }
@@ -502,6 +508,43 @@ em {
   font-size: 0.82rem;
 }
 
+.powered-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(184, 255, 94, 0.06);
+  border: 1px solid rgba(184, 255, 94, 0.18);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: 0 0 18px;
+}
+
+.powered-by strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.powered-by a {
+  color: inherit;
+}
+
+.powered-by a:hover strong {
+  text-decoration: underline;
+}
+
+.powered-mark {
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+
+.powered-by-aside {
+  margin-top: 16px;
+  font-size: 0.78rem;
+  padding: 6px 12px;
+}
+
 /* ---------- auth card ---------- */
 .auth-card {
   width: 100%;
@@ -641,6 +684,43 @@ em {
   color: var(--text-dim);
   font-size: 0.88rem;
   line-height: 1.6;
+}
+
+.demo-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  margin: 0 0 18px;
+  border-radius: 12px;
+  background: linear-gradient(
+    100deg,
+    rgba(184, 255, 94, 0.12),
+    rgba(124, 92, 255, 0.12)
+  );
+  border: 1px solid rgba(184, 255, 94, 0.28);
+}
+
+.demo-banner-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.demo-banner-text {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.demo-banner-text strong {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  color: var(--accent);
+  letter-spacing: 0.18em;
+  margin-left: 4px;
+  user-select: all;
 }
 
 #twofa-code {

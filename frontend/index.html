@@ -23,7 +23,8 @@
         <a href="#manifesto">Manifesto</a>
       </nav>
       <div class="nav-cta">
-        <span class="nav-meta">v0.0.1 · pre-alpha · pre-product</span>
+        <a class="btn btn-ghost" href="#/login" data-route="login">Sign in</a>
+        <a class="btn btn-primary" href="#/register" data-route="register">Start free trial</a>
       </div>
     </header>
 
@@ -49,11 +50,11 @@
           </p>
 
           <div class="hero-cta">
-            <a class="btn btn-ghost btn-lg" href="#features">
-              Watch 47-min demo
+            <a class="btn btn-primary btn-lg" href="#/register" data-route="register">
+              Get started free <span class="arrow">→</span>
             </a>
-            <a class="btn btn-ghost btn-lg" href="#manifesto">
-              Read the manifesto
+            <a class="btn btn-ghost btn-lg" href="#/login" data-route="login">
+              Sign in
             </a>
           </div>
 
@@ -180,6 +181,12 @@
         </section>
 
         <footer class="site-footer">
+          <p class="powered-by">
+            <span class="powered-mark">◈</span>
+            Auth genuinely powered by
+            <a href="https://github.com/" target="_blank" rel="noopener"><strong>Cadence</strong></a>
+            — the only working piece of technology in this entire product.
+          </p>
           <small>
             © 2026 Synergyze, Inc. † not actually featured. Patent
             pending&nbsp;(rejected). All rights reserved (some).
@@ -229,8 +236,8 @@
                 required
               />
               <span class="field-hint">
-                Minimum 8 characters. Type naturally — your keystroke rhythm is
-                your second factor.
+                Minimum 8 characters. Type naturally — Cadence will use your
+                keystroke rhythm as a second factor on sign in.
               </span>
             </label>
 
@@ -251,8 +258,11 @@
             <ul>
               <li>Receive 4–11 emails per day from Chad</li>
               <li>Be invited to a Discord you'll never visit</li>
-              <li>Hand over your typing cadence to our model</li>
+              <li>Let Cadence (an external thing, not us) read your typing rhythm</li>
             </ul>
+            <p class="powered-by powered-by-aside">
+              <span class="powered-mark">◈</span> Powered by Cadence
+            </p>
           </div>
         </div>
       </section>
@@ -263,7 +273,7 @@
           <a class="auth-back" href="#" data-route="landing">← back to home</a>
           <h1 class="auth-title">Welcome back, synergist</h1>
           <p class="auth-sub">
-            Sign in with your password and your unique typing rhythm.
+            Sign in with your password. Cadence handles the rest.
           </p>
 
           <form class="auth-form" id="login-form" autocomplete="off" novalidate>
@@ -288,8 +298,8 @@
                 required
               />
               <span class="field-hint">
-                Type the way you always do. We're watching the rhythm, not the
-                characters.
+                Type the way you always do. Cadence watches the rhythm, not the
+                characters — Synergyze couldn't build this if we tried.
               </span>
             </label>
 
@@ -309,9 +319,12 @@
             <p class="aside-eyebrow">Why two factors?</p>
             <ul>
               <li>Passwords leak. Your typing rhythm doesn't.</li>
-              <li>If the rhythm looks off, we'll email you a one-time code.</li>
+              <li>If Cadence isn't sure it's you, it'll email a one-time code.</li>
               <li>Five clean logins and you're fully enrolled.</li>
             </ul>
+            <p class="powered-by powered-by-aside">
+              <span class="powered-mark">◈</span> Powered by Cadence
+            </p>
           </div>
         </div>
       </section>
@@ -324,6 +337,14 @@
           <p class="auth-sub">
             We sent a 6-digit code to your email. It's good for 5 minutes.
           </p>
+
+          <div class="demo-banner" id="demo-banner" hidden>
+            <span class="demo-banner-label">Demo mode</span>
+            <span class="demo-banner-text">
+              No email needed — your code is
+              <strong id="demo-otp">000000</strong>
+            </span>
+          </div>
 
           <form class="auth-form" id="twofa-form" autocomplete="off" novalidate>
             <label class="field">
