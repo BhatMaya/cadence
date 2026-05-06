@@ -29,12 +29,21 @@ require() {
 }
 
 bold "[1/5] Checking prerequisites"
-require python3 "Install Python 3.11+."
+require python3 "Install Python 3.11 or 3.12. (3.13 may lack TensorFlow wheels and force a long source build.)"
+PY_VERSION="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+case "$PY_VERSION" in
+    3.11|3.12) ;;
+    *) info "warning: python $PY_VERSION detected; tensorflow-cpu wheels are most reliable on 3.11 / 3.12." ;;
+esac
 require docker "Install Docker Desktop or Docker Engine, then make sure the daemon is running."
 docker info >/dev/null 2>&1 || fail "Docker daemon isn't responding. Start Docker and re-run."
 require supabase "Install with: brew install supabase/tap/supabase  (macOS) or see https://supabase.com/docs/guides/cli."
+# `supabase status -o env` was added in CLI v1.x. Bail early if it's
+# missing rather than producing confusing errors later.
+supabase status --help 2>&1 | grep -q -- '-o, --output' \
+    || fail "Your Supabase CLI is too old (need v1.x+ that supports '-o env'). Upgrade it."
 require psql "Install the Postgres client (libpq). On macOS: brew install libpq && brew link --force libpq."
-ok "tooling looks good"
+ok "tooling looks good (python $PY_VERSION)"
 
 bold "[2/5] Python venv + backend deps"
 if [ ! -d "$VENV_DIR" ]; then
@@ -48,7 +57,9 @@ ok "deps installed (this may take a minute on first run — tensorflow is large)
 bold "[3/5] Supabase local stack"
 cd "$REPO_ROOT"
 if [ ! -f "$REPO_ROOT/supabase/config.toml" ]; then
-    supabase init >/dev/null
+    # `supabase init` asks about VS Code / IntelliJ settings. Decline both
+    # so the script stays non-interactive.
+    printf 'N\nN\n' | supabase init >/dev/null
     info "supabase project initialized"
 fi
 # `supabase start` is idempotent — if the stack is already up it just
