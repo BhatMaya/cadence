@@ -50,8 +50,10 @@ Responses:
 
 POST /authenticate
 ------------------
-Purpose: Attempt login with username/password and keystroke biometrics. On success, user is logged in.
-         On failure, 2FA is triggered.
+Purpose: Attempt login with username/password and keystroke biometrics. Users need
+         5 successful keystroke samples before biometric-only login is enabled.
+         Until then, each sample is backed by 2FA and counts toward enrollment
+         after the code is verified.
 
 Request Body:
 {
@@ -90,13 +92,35 @@ Responses:
   {"status": "account is locked"} - 200
   
 - ML score accepted (user logged in):
-  {"status": "accepted"} - 200
+  {
+    "status": "accepted",
+    "enrolled": true,
+    "enrollment_count": 6,
+    "enrollment_required": 5,
+    "enrollment_samples_needed": 0
+  } - 200
+  
+- Enrollment sample required (2FA required):
+  {
+    "status": "2fa required",
+    "login_attempt_id": "uuid",
+    "reason": "enrollment_required",
+    "enrolled": false,
+    "enrollment_count": 2,
+    "enrollment_required": 5,
+    "enrollment_samples_needed": 3
+  } - 200
   
 - ML score rejected (2FA required):
-  {"status": "2fa required"} - 200
-  
-- No enrollment data:
-  {"status": "no score available"} - 200
+  {
+    "status": "2fa required",
+    "login_attempt_id": "uuid",
+    "reason": "low_confidence",
+    "enrolled": true,
+    "enrollment_count": 5,
+    "enrollment_required": 5,
+    "enrollment_samples_needed": 0
+  } - 200
   
 - Error (missing field):
   {"status": "error", "message": "missing username" | "missing raw_data"} - 400
@@ -127,8 +151,16 @@ Responses:
 - Code expired (> 5 minutes old):
   {"status": "rejected", "message": "expired"} - 200
   
-- Code verified successfully (user logged in):
-  {"status": "accepted"} - 200
+- Code verified successfully:
+  {
+    "status": "accepted",
+    "enrolled": false,
+    "enrollment_count": 3,
+    "enrollment_required": 5,
+    "enrollment_samples_needed": 2
+  } - 200
+  If enrolled=false, the frontend should collect another enrollment sample.
+  If enrolled=true, the user has completed enrollment and is logged in.
   
 - Error (missing field):
   {"status": "error", "message": "missing username" | "missing code" | "missing login_attempt_id"} - 400
@@ -165,7 +197,7 @@ The user_profiles table has a "current_login_status" column with values:
 - "logged in"    : User successfully authenticated
 - "pending 2fa"  : ML score rejected, 2FA code sent, awaiting verification
 - "locked"       : Account locked due to 3 failed 2FA attempts
-- null           : Initial state before any login attempt
+- null           : Initial state, or enrollment still needs more samples
 
 
 4. REQUEST/RESPONSE FLOW EXAMPLE
@@ -179,7 +211,15 @@ POST /authenticate
 }
 
 Response (2FA required):
-{"status": "2fa required"}
+{
+  "status": "2fa required",
+  "login_attempt_id": "uuid-from-step1",
+  "reason": "enrollment_required",
+  "enrolled": false,
+  "enrollment_count": 0,
+  "enrollment_required": 5,
+  "enrollment_samples_needed": 5
+}
 
 Database Updates:
 - current_login_status set to "pending 2fa"
@@ -197,12 +237,21 @@ POST /code_verification
 }
 
 Response (success):
-{"status": "accepted"}
+{
+  "status": "accepted",
+  "enrolled": false,
+  "enrollment_count": 1,
+  "enrollment_required": 5,
+  "enrollment_samples_needed": 4
+}
 
 Database Updates:
-- current_login_status set to "logged in"
+- current_login_status remains null until 5 successful samples are collected
 - _2fa record deleted (can't reuse code)
 - login_attempts marked successful_login=True
+
+Repeat steps 1-2 until enrollment_count reaches 5. The 5th successful
+verification returns enrolled=true and sets current_login_status to "logged in".
 
 
 Step 3: User tries to login again while logged in
@@ -240,10 +289,11 @@ ML Model Requirements:
 - Input: Keystroke sequences with 3 timing features per keystroke
   [hold_time, flight_time, down_down]
 - Output: Similarity score between 0.0 and 1.0 (higher = more similar to enrollment)
-- Enrollment: Uses the user's previous successful login attempts
+- Enrollment: Requires 5 successful login attempts before biometric-only login
 - Threshold: Retrieved from user_profiles table for each user
 
 Score Decision:
+- successful_login count < 5 → Trigger 2FA, reason="enrollment_required"
 - score >= user_threshold → Accept login, set status to "logged in"
 - score < user_threshold → Trigger 2FA, set status to "pending 2fa"
 

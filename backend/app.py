@@ -18,6 +18,9 @@ except ImportError:
 
 app = Flask(__name__)
 model_service = CadenceModelService()
+REQUIRED_ENROLLMENT_SAMPLES = int(
+    os.getenv("CADENCE_REQUIRED_ENROLLMENT_SAMPLES", "5")
+)
 
 # start supabase client
 # backend service key is used here for auth and data operations
@@ -43,6 +46,46 @@ def _supabase_sign_in(email, password):
         return auth.sign_in_with_password({"email": email, "password": password})
     except TypeError:
         return auth.sign_in(email=email, password=password)
+
+
+def count_successful_login_attempts(user_id):
+    result = supabase.table("login_attempts") \
+        .select("login_attempt_id") \
+        .eq("user_id", user_id) \
+        .eq("successful_login", True) \
+        .execute()
+    return len(result.data or [])
+
+
+def enrollment_payload(enrollment_count):
+    samples_needed = max(REQUIRED_ENROLLMENT_SAMPLES - enrollment_count, 0)
+    return {
+        "enrolled": samples_needed == 0,
+        "enrollment_count": enrollment_count,
+        "enrollment_required": REQUIRED_ENROLLMENT_SAMPLES,
+        "enrollment_samples_needed": samples_needed,
+    }
+
+
+def require_2fa(user_id, username, login_attempt_id, enrollment_count, reason):
+    supabase.table("user_profiles") \
+        .update({"current_login_status": "pending 2fa"}) \
+        .eq("user_id", user_id) \
+        .execute()
+
+    supabase.table("login_attempts") \
+        .update({"two_fa_invoked": True}) \
+        .eq("login_attempt_id", login_attempt_id) \
+        .execute()
+
+    send_code(user_id, username, login_attempt_id)
+
+    return jsonify({
+        "status": "2fa required",
+        "login_attempt_id": login_attempt_id,
+        "reason": reason,
+        **enrollment_payload(enrollment_count),
+    }), 200
 
 
 # health check endpoint 
@@ -194,9 +237,19 @@ def authenticate():
         return jsonify({"status": "error", "message": "invalid credentials"}), 401
 
     # create new login attempt w user info 
+    enrollment_count = count_successful_login_attempts(user_id)
     login_attempt_id = create_login_attempt(supabase, user_id, username, raw_data)
     if login_attempt_id == None:
         return jsonify({"status": "can't verify login"}), 200
+
+    if enrollment_count < REQUIRED_ENROLLMENT_SAMPLES:
+        return require_2fa(
+            user_id,
+            username,
+            login_attempt_id,
+            enrollment_count,
+            "enrollment_required",
+        )
 
     # get the score from ML engine 
     score = get_score(username, raw_data, login_attempt_id)
@@ -221,30 +274,30 @@ def authenticate():
 
     # check it
     if (score >= threshold):
+        enrollment_count += 1
+        supabase.table("login_attempts") \
+            .update({"successful_login": True}) \
+            .eq("login_attempt_id", login_attempt_id) \
+            .execute()
+
         # mark as logged in
         supabase.table("user_profiles") \
             .update({"current_login_status": "logged in"}) \
             .eq("user_id", user_id) \
             .execute()
             
-        return jsonify({"status": "accepted"}), 200
+        return jsonify({
+            "status": "accepted",
+            **enrollment_payload(enrollment_count),
+        }), 200
     else:
-        # mark as pending 2fa
-        supabase.table("user_profiles") \
-            .update({"current_login_status": "pending 2fa"}) \
-            .eq("user_id", user_id) \
-            .execute()
-        
-        # MARK 2FA AS INVOKED FOR THIS LOGIN ATTEMPT  # ADDED
-        supabase.table("login_attempts") \
-            .update({"two_fa_invoked": True}) \
-            .eq("login_attempt_id", login_attempt_id) \
-            .execute()
-
-        # send 2fa email 
-        send_code(user_id, username, login_attempt_id)
-
-        return jsonify({"status": "2fa required", "login_attempt_id": login_attempt_id}), 200
+        return require_2fa(
+            user_id,
+            username,
+            login_attempt_id,
+            enrollment_count,
+            "low_confidence",
+        )
 
 # main endpoint 2: after code is sent to user's email, client gets one-time code from user. 
 # this method verifies it against the OTP hash that was generated and stored in _2fa challenges table in supabase. 
@@ -330,14 +383,20 @@ def code_verification():
     .update({"successful_login": True}) \
     .eq("login_attempt_id", login_attempt_id) \
     .execute()
+
+    enrollment_count = count_successful_login_attempts(user_id)
+    user_status = "logged in" if enrollment_count >= REQUIRED_ENROLLMENT_SAMPLES else None
     
-    # mark user as logged in
+    # Enrollment attempts stay login-capable until enough samples are collected.
     supabase.table("user_profiles") \
-        .update({"current_login_status": "logged in"}) \
+        .update({"current_login_status": user_status}) \
         .eq("user_id", user_id) \
         .execute()
     
-    return jsonify({"status": "accepted"}), 200
+    return jsonify({
+        "status": "accepted",
+        **enrollment_payload(enrollment_count),
+    }), 200
 
 # resend 2fa code endpoint
 @app.post("/resend_code")
