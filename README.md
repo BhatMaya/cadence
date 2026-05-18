@@ -8,7 +8,7 @@ against the user's prior successful samples.
 ```
 cadence/
 ├── backend/           # Flask API (auth, 2FA, ML scoring)
-├── frontend/          # mock landing + register/login UI
+├── frontend/          # Next.js mock landing + register/login UI
 ├── packages/capture/  # browser keystroke capture library
 ├── model.py           # siamese network architecture
 ├── train.py           # training loop
@@ -64,12 +64,13 @@ cd backend
 source .venv/bin/activate
 python -c "from app import app; app.run(host='127.0.0.1', port=5001)"
 
-# 2. Frontend (static, port 5173)
+# 2. Frontend (Next.js, port 3000)
 cd frontend
-python3 -m http.server 5173
+npm install
+npm run dev
 ```
 
-Open <http://localhost:5173>, register, sign in, and copy the OTP from
+Open <http://localhost:3000>, register, sign in, and copy the OTP from
 the green "Demo mode" banner on the 2FA page.
 
 ### Useful commands
@@ -109,9 +110,10 @@ until you verify a sending domain at <https://resend.com/domains>.
 - **`packages/capture/`** — TypeScript/ESM browser library that
   captures `keydown`/`keyup` timings into a `Sample` payload. The
   frontend imports the prebuilt dist from `frontend/vendor/`.
-- **`frontend/`** — single static page with hash routing
-  (`/`, `#/register`, `#/login`, `#/twofa`, `#/dashboard`). Posts to
+- **`frontend/`** — Next.js app with client-side routes
+  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Posts to
   `http://localhost:5001` by default; override with
+  `NEXT_PUBLIC_SYNERGYZE_API_BASE` or
   `localStorage.setItem('synergyze.api_base', '...')` in the browser
   console.
 - **`model.py` / `train.py`** — the model architecture and training

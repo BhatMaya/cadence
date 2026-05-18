@@ -23,6 +23,7 @@ model_service = CadenceModelService()
 # OTP in the API response so testers without access to the inbox can
 # still complete 2FA. Never enable in production.
 DEMO_MODE = os.getenv("CADENCE_DEMO_MODE", "0").lower() in {"1", "true", "yes"}
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "team@cadence-capstone.us")
 
 # CORS for the local dev frontend. Override with CADENCE_CORS_ORIGINS
 # (comma-separated) when deploying behind a different origin.
@@ -523,7 +524,7 @@ def resend_code():
 
     resend.api_key = os.getenv("RESEND_KEY")
     resend.Emails.send({
-        "from": "onboarding@resend.dev",
+        "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
         "html": f"<p>Your one-time code is: {otp}</p>"
@@ -610,7 +611,7 @@ def send_code(user_id, username, login_attempt_id):
 
     resend.api_key = os.getenv("RESEND_KEY")
     resend.Emails.send({
-        "from": "onboarding@resend.dev",  # default test sender
+        "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
         "html": f"<p>Your one-time code is: {otp}</p>"
