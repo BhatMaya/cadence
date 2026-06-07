@@ -472,6 +472,19 @@ def count_successful_login_attempts(user_id):
     return len(result.data or [])
 
 
+def _increment_successful_logins(user_id):
+    profile = supabase.table("user_profiles") \
+        .select("number_of_successful_logins") \
+        .eq("user_id", user_id) \
+        .single() \
+        .execute()
+    current = (profile.data or {}).get("number_of_successful_logins") or 0
+    supabase.table("user_profiles") \
+        .update({"number_of_successful_logins": current + 1}) \
+        .eq("user_id", user_id) \
+        .execute()
+
+
 def enrollment_payload(enrollment_count):
     samples_needed = max(REQUIRED_ENROLLMENT_SAMPLES - enrollment_count, 0)
     return {
@@ -1114,6 +1127,7 @@ def signup():
             "current_login_status": None,
             "number_login_attempts": 0,
             "failed_password_attempts": 0,
+            "number_of_successful_logins": 0,
         }).execute()
     except Exception as exc:
         app.logger.exception("signup profile insert failed for user_id=%s", user_id)
@@ -1279,7 +1293,9 @@ def authenticate():
             .update({"current_login_status": "logged in", "failed_password_attempts": 0}) \
             .eq("user_id", user_id) \
             .execute()
-            
+
+        _increment_successful_logins(user_id)
+
         return jsonify({
             "status": "accepted",
             **enrollment_payload(enrollment_count),
@@ -1427,6 +1443,8 @@ def code_verification():
         .update({"current_login_status": user_status, "failed_password_attempts": 0}) \
         .eq("user_id", user_id) \
         .execute()
+
+    _increment_successful_logins(user_id)
 
     return jsonify({
         "status": "accepted",
