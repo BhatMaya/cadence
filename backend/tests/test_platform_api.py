@@ -89,23 +89,20 @@ class FakeQuery:
 class FakeSupabase:
     ID_COLUMNS = {
         "api_keys": "api_key_id",
-        "app_registrations": "app_registration_id",
         "applications": "application_id",
-        "end_users": "end_user_id",
-        "typing_samples": "typing_sample_id",
-        "score_requests": "score_request_id",
     }
 
     def __init__(self):
         self.tables = {
             "applications": [
-                {"application_id": "app-1", "name": "Demo", "allowed_origins": []}
+                {
+                    "application_id": "app-1",
+                    "name": "Demo",
+                    "allowed_origins": [],
+                    "approved": True,
+                }
             ],
-            "app_registrations": [],
             "api_keys": [],
-            "end_users": [],
-            "typing_samples": [],
-            "score_requests": [],
         }
         self.next_id = 1
 
@@ -122,6 +119,81 @@ class FakeSupabase:
             self.next_id += 1
 
 
+class FakeAuthObject:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class FakeAuth:
+    def __init__(self):
+        self.users_by_token = {
+            "confirmed-token": FakeAuthObject(
+                id="developer-1",
+                email="dev@partner.example",
+                email_confirmed_at="2026-01-01T00:00:00+00:00",
+            ),
+            "other-token": FakeAuthObject(
+                id="developer-2",
+                email="other@partner.example",
+                email_confirmed_at="2026-01-01T00:00:00+00:00",
+            ),
+            "unconfirmed-token": FakeAuthObject(
+                id="developer-3",
+                email="new@partner.example",
+                email_confirmed_at=None,
+            ),
+        }
+
+    def get_user(self, token):
+        user = self.users_by_token.get(token)
+        if not user:
+            raise ValueError("bad token")
+        return FakeAuthObject(user=user)
+
+    def sign_up(self, payload=None, **kwargs):
+        data = payload or kwargs
+        return FakeAuthObject(
+            user=FakeAuthObject(
+                id="developer-4",
+                email=data.get("email"),
+                email_confirmed_at=None,
+            ),
+            session=None,
+        )
+
+    def sign_in_with_password(self, payload):
+        email = payload.get("email")
+        user = next(
+            (
+                candidate
+                for candidate in self.users_by_token.values()
+                if candidate.email == email
+            ),
+            None,
+        )
+        if not user:
+            raise ValueError("invalid credentials")
+        token = next(
+            token
+            for token, candidate in self.users_by_token.items()
+            if candidate is user
+        )
+        return FakeAuthObject(
+            user=user,
+            session=FakeAuthObject(
+                access_token=token,
+                refresh_token="refresh-token",
+                expires_at=1790000000,
+                expires_in=3600,
+            ),
+        )
+
+
+class FakeSupabaseAuthClient:
+    def __init__(self):
+        self.auth = FakeAuth()
+
+
 class FakeModelService:
     enrollment_limit = 10
 
@@ -135,6 +207,7 @@ class FakeModelService:
 class PlatformApiTest(unittest.TestCase):
     def setUp(self):
         self.original_supabase = cadence_app.supabase
+        self.original_supabase_auth = cadence_app.supabase_auth
         self.original_model_service = cadence_app.model_service
         self.original_admin_token = cadence_app.ADMIN_TOKEN
         self.original_allow_open_admin = cadence_app.ALLOW_OPEN_ADMIN
@@ -150,6 +223,7 @@ class PlatformApiTest(unittest.TestCase):
             "revoked_at": None,
         })
         cadence_app.supabase = self.fake_supabase
+        cadence_app.supabase_auth = FakeSupabaseAuthClient()
         cadence_app.model_service = FakeModelService()
         cadence_app.ADMIN_TOKEN = ""
         cadence_app.ALLOW_OPEN_ADMIN = True
@@ -158,6 +232,7 @@ class PlatformApiTest(unittest.TestCase):
 
     def tearDown(self):
         cadence_app.supabase = self.original_supabase
+        cadence_app.supabase_auth = self.original_supabase_auth
         cadence_app.model_service = self.original_model_service
         cadence_app.ADMIN_TOKEN = self.original_admin_token
         cadence_app.ALLOW_OPEN_ADMIN = self.original_allow_open_admin
@@ -166,40 +241,8 @@ class PlatformApiTest(unittest.TestCase):
     def auth_headers(self):
         return {"Authorization": f"Bearer {self.api_key}"}
 
-    def test_platform_enroll_and_score_flow(self):
-        raw_data = {
-            "keystrokes": [
-                {"hold_time": 80, "flight_time": 0, "down_down": 0},
-                {"hold_time": 82, "flight_time": 42, "down_down": 122},
-            ]
-        }
-
-        for _index in range(cadence_app.REQUIRED_ENROLLMENT_SAMPLES):
-            response = self.client.post(
-                "/v1/enroll",
-                json={"external_user_id": "user-123", "raw_data": raw_data},
-                headers=self.auth_headers(),
-            )
-            self.assertEqual(response.status_code, 201)
-
-        response = self.client.post(
-            "/v1/score",
-            json={"external_user_id": "user-123", "raw_data": raw_data},
-            headers=self.auth_headers(),
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.get_json()
-        self.assertEqual(body["status"], "ok")
-        self.assertTrue(body["enrolled"])
-        self.assertTrue(body["accepted"])
-        self.assertTrue(body["match"])
-        self.assertEqual(body["score"], 0.82)
-        self.assertEqual(body["confidence"], 0.82)
-        self.assertEqual(body["reason"], "accepted")
-        self.assertGreaterEqual(body["score_duration_ms"], 0)
-        self.assertEqual(len(self.fake_supabase.tables["score_requests"]), 1)
-        self.assertIn("score_duration_ms", self.fake_supabase.tables["score_requests"][0])
+    def developer_headers(self, token="confirmed-token"):
+        return {"Authorization": f"Bearer {token}"}
 
     def test_create_app_and_api_key(self):
         response = self.client.post(
@@ -233,6 +276,97 @@ class PlatformApiTest(unittest.TestCase):
         self.assertEqual(stored_key["key_prefix"], key_body["key_prefix"])
         self.assertEqual(stored_key["key_hash"], cadence_app.hash_api_key(key_body["key"]))
         self.assertNotIn("key", stored_key)
+
+    def test_developer_signup_requires_email_confirmation(self):
+        response = self.client.post(
+            "/v1/developer/signup",
+            json={"email": "new@partner.example", "password": "correct horse"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.get_json()
+        self.assertEqual(body["status"], "signed_up")
+        self.assertFalse(body["email_confirmed"])
+        self.assertIsNone(body["session"])
+
+    def test_confirmed_developer_login_create_app_and_key(self):
+        response = self.client.post(
+            "/v1/developer/login",
+            json={"email": "dev@partner.example", "password": "correct horse"},
+        )
+        self.assertEqual(response.status_code, 200)
+        session = response.get_json()["session"]
+        self.assertEqual(session["access_token"], "confirmed-token")
+
+        response = self.client.post(
+            "/v1/developer/apps",
+            json={
+                "name": "Partner App",
+                "slug": "partner-app",
+                "allowed_origins": ["https://partner.example"],
+                "key_name": "production",
+            },
+            headers=self.developer_headers(session["access_token"]),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.get_json()
+        application = body["application"]
+        api_key = body["api_key"]
+        self.assertEqual(application["contact_email"], "dev@partner.example")
+        self.assertTrue(application["approved"])
+        self.assertEqual(application["allowed_origins"], ["https://partner.example"])
+        self.assertEqual(api_key["name"], "production")
+        self.assertTrue(api_key["key"].startswith("sk_live_"))
+        self.assertEqual(
+            self.fake_supabase.tables["api_keys"][-1]["key_hash"],
+            cadence_app.hash_api_key(api_key["key"]),
+        )
+
+        response = self.client.get(
+            "/v1/developer/apps",
+            headers=self.developer_headers(session["access_token"]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["applications"][0]["application_id"],
+            application["application_id"],
+        )
+
+        response = self.client.get(
+            f"/v1/developer/apps/{application['application_id']}/api-keys",
+            headers=self.developer_headers(session["access_token"]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["api_keys"][0]["key_prefix"], api_key["key_prefix"])
+        self.assertNotIn("key_hash", response.get_json()["api_keys"][0])
+
+    def test_developer_login_rejects_unconfirmed_email(self):
+        response = self.client.post(
+            "/v1/developer/login",
+            json={"email": "new@partner.example", "password": "correct horse"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["status"], "email_not_confirmed")
+
+    def test_developer_cannot_manage_another_developers_app(self):
+        self.fake_supabase.tables["applications"].append({
+            "application_id": "owned-by-other",
+            "name": "Other App",
+            "slug": "other-app",
+            "allowed_origins": [],
+            "contact_email": "other@partner.example",
+            "approved": True,
+        })
+
+        response = self.client.get(
+            "/v1/developer/apps/owned-by-other/api-keys",
+            headers=self.developer_headers("confirmed-token"),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["status"], "not_found")
 
     def test_admin_endpoints_fail_closed_without_admin_token(self):
         cadence_app.ALLOW_OPEN_ADMIN = False
@@ -273,6 +407,7 @@ class PlatformApiTest(unittest.TestCase):
         lookup_token = response.get_json()["lookup_token"]
         self.assertTrue(lookup_token.startswith("reg_status_"))
         self.assertEqual(registration["status"], "pending")
+        self.assertFalse(registration["approved"])
         self.assertEqual(registration["contact_email"], "dev@partner.example")
         self.assertNotIn("lookup_token_hash", registration)
 
@@ -286,9 +421,12 @@ class PlatformApiTest(unittest.TestCase):
         response = self.client.get("/v1/app-registrations")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("lookup_token_hash", response.get_json()["registrations"][0])
-        self.assertEqual(
-            response.get_json()["registrations"][0]["app_registration_id"],
+        self.assertIn(
             registration["app_registration_id"],
+            [
+                row["app_registration_id"]
+                for row in response.get_json()["registrations"]
+            ],
         )
 
         response = self.client.post(
@@ -299,6 +437,7 @@ class PlatformApiTest(unittest.TestCase):
         body = response.get_json()
         self.assertEqual(body["status"], "approved")
         self.assertEqual(body["registration"]["status"], "approved")
+        self.assertTrue(body["registration"]["approved"])
         self.assertEqual(
             body["registration"]["application_id"],
             body["application"]["application_id"],
@@ -318,7 +457,7 @@ class PlatformApiTest(unittest.TestCase):
             body["application"]["application_id"],
         )
 
-    def test_registration_status_rejects_invalid_lookup_token(self):
+    def test_registration_status_uses_application_id(self):
         response = self.client.post(
             "/v1/app-registrations",
             json={
@@ -334,8 +473,11 @@ class PlatformApiTest(unittest.TestCase):
             headers={"Authorization": "Bearer wrong"},
         )
 
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.get_json()["message"], "invalid lookup token")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["registration"]["app_registration_id"],
+            registration_id,
+        )
 
     def test_public_registration_can_be_rejected(self):
         response = self.client.post(
@@ -372,8 +514,9 @@ class PlatformApiTest(unittest.TestCase):
         self.assertIsNotNone(body["api_key"]["revoked_at"])
         self.assertNotIn("key_hash", body["api_key"])
 
-        response = self.client.get(
-            "/v1/end-users/user-123",
+        response = self.client.patch(
+            "/v1/apps/app-1/threshold",
+            json={"threshold": 0.5},
             headers=self.auth_headers(),
         )
         self.assertEqual(response.status_code, 401)
@@ -384,8 +527,9 @@ class PlatformApiTest(unittest.TestCase):
             "https://allowed.example"
         ]
 
-        response = self.client.get(
-            "/v1/end-users/user-123",
+        response = self.client.patch(
+            "/v1/apps/app-1/threshold",
+            json={"threshold": 0.5},
             headers={
                 **self.auth_headers(),
                 "Origin": "https://evil.example",
@@ -431,58 +575,6 @@ class PlatformApiTest(unittest.TestCase):
             "revoked_at": "2026-01-01T00:00:00+00:00",
             "last_used_at": "2026-01-01T00:00:00+00:00",
         })
-        self.fake_supabase.tables["end_users"].extend([
-            {"end_user_id": "end-user-1", "application_id": "app-1", "external_user_id": "user-1"},
-            {"end_user_id": "end-user-2", "application_id": "app-1", "external_user_id": "user-2"},
-            {"end_user_id": "other-user", "application_id": "other-app", "external_user_id": "other"},
-        ])
-        for index in range(cadence_app.REQUIRED_ENROLLMENT_SAMPLES):
-            self.fake_supabase.tables["typing_samples"].append({
-                "typing_sample_id": f"sample-{index}",
-                "application_id": "app-1",
-                "end_user_id": "end-user-1",
-                "successful": True,
-                "source": "enrollment",
-            })
-        self.fake_supabase.tables["typing_samples"].append({
-            "typing_sample_id": "sample-score",
-            "application_id": "app-1",
-            "end_user_id": "end-user-1",
-            "successful": True,
-            "source": "score",
-        })
-        self.fake_supabase.tables["typing_samples"].append({
-            "typing_sample_id": "sample-other",
-            "application_id": "other-app",
-            "end_user_id": "other-user",
-            "successful": True,
-            "source": "enrollment",
-        })
-        self.fake_supabase.tables["score_requests"].extend([
-            {
-                "score_request_id": "score-1",
-                "application_id": "app-1",
-                "accepted": True,
-                "reason": "accepted",
-                "score_duration_ms": 12.5,
-                "created_at": "2026-01-01T00:00:00+00:00",
-            },
-            {
-                "score_request_id": "score-2",
-                "application_id": "app-1",
-                "accepted": False,
-                "reason": "low_confidence",
-                "score_duration_ms": 37.5,
-                "created_at": "2026-01-02T00:00:00+00:00",
-            },
-            {
-                "score_request_id": "score-other",
-                "application_id": "other-app",
-                "accepted": True,
-                "reason": "accepted",
-                "score_duration_ms": 1,
-            },
-        ])
 
         response = self.client.get("/v1/apps/app-1/usage")
 
@@ -492,25 +584,13 @@ class PlatformApiTest(unittest.TestCase):
         self.assertEqual(usage["api_keys"]["total"], 2)
         self.assertEqual(usage["api_keys"]["active"], 1)
         self.assertEqual(usage["api_keys"]["revoked"], 1)
-        self.assertEqual(usage["end_users"]["total"], 2)
-        self.assertEqual(usage["end_users"]["enrolled"], 1)
-        self.assertEqual(usage["typing_samples"]["total"], cadence_app.REQUIRED_ENROLLMENT_SAMPLES + 1)
-        self.assertEqual(usage["typing_samples"]["enrollment"], cadence_app.REQUIRED_ENROLLMENT_SAMPLES)
-        self.assertEqual(usage["typing_samples"]["score_stored"], 1)
-        self.assertEqual(usage["score_requests"]["total"], 2)
-        self.assertEqual(usage["score_requests"]["accepted"], 1)
-        self.assertEqual(usage["score_requests"]["rejected"], 1)
-        self.assertEqual(usage["score_requests"]["acceptance_rate"], 0.5)
-        self.assertEqual(usage["score_requests"]["avg_score_duration_ms"], 25)
-        self.assertEqual(usage["score_requests"]["p95_score_duration_ms"], 37.5)
         self.assertEqual(
-            usage["score_requests"]["reason_counts"],
-            {"accepted": 1, "low_confidence": 1},
+            usage["api_keys"]["last_used_at"],
+            "2026-01-01T00:00:00+00:00",
         )
-        self.assertEqual(
-            usage["score_requests"]["last_scored_at"],
-            "2026-01-02T00:00:00+00:00",
-        )
+        self.assertNotIn("end_users", usage)
+        self.assertNotIn("typing_samples", usage)
+        self.assertNotIn("score_requests", usage)
 
     def test_app_usage_returns_not_found_for_missing_application(self):
         response = self.client.get("/v1/apps/missing/usage")

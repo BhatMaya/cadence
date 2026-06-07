@@ -216,7 +216,13 @@ The /v1/* endpoints let registered applications use Cadence typing
 analysis without adopting the bundled demo authentication UI.
 
 Authentication:
-- POST /v1/app-registrations is public and creates a pending request.
+- POST /v1/developer/signup and POST /v1/developer/login create and
+  authenticate developer accounts through Supabase Auth.
+- /v1/developer/* app-management endpoints require Authorization:
+  Bearer <Supabase developer access token>. The developer email must be
+  confirmed before apps or API keys can be created.
+- POST /v1/app-registrations is public and creates a pending request for
+  the legacy/manual approval flow.
 - POST /v1/apps and POST /v1/apps/<application_id>/api-keys require
   X-Cadence-Admin-Token or Authorization: Bearer <CADENCE_ADMIN_TOKEN>.
   If CADENCE_ADMIN_TOKEN is missing, admin endpoints fail closed unless
@@ -226,6 +232,98 @@ Authentication:
 - Store sk_live keys only in trusted server-side code. Browser clients
   should capture samples with the npm package, send them to their own
   backend, and have that backend call Cadence.
+
+
+POST /v1/developer/signup
+-------------------------
+Purpose: Create a developer account through Supabase Auth. If Supabase email
+         confirmation is enabled, the developer must confirm before login can
+         create apps.
+
+Request Body:
+{
+  "email": "dev@example.com",
+  "password": "string"
+}
+
+Response:
+{
+  "status": "signed_up",
+  "developer": {"user_id": "uuid", "email": "dev@example.com"},
+  "email_confirmed": false,
+  "session": null,
+  "message": "Check your email to confirm your developer account."
+} - 201
+
+
+POST /v1/developer/login
+------------------------
+Purpose: Sign in a confirmed developer account and return a Supabase access
+         token for self-serve app/key management.
+
+Request Body:
+{
+  "email": "dev@example.com",
+  "password": "string"
+}
+
+Response:
+{
+  "status": "ok",
+  "developer": {"user_id": "uuid", "email": "dev@example.com"},
+  "session": {"access_token": "...", "refresh_token": "..."}
+} - 200
+
+
+POST /v1/developer/apps
+-----------------------
+Purpose: Create an application owned by the signed-in developer and issue the
+         first server-side API key immediately.
+
+Headers:
+  Authorization: Bearer <developer-access-token>
+
+Request Body:
+{
+  "name": "Partner App",
+  "slug": "partner-app",
+  "allowed_origins": ["https://app.example.com"],
+  "key_name": "production"
+}
+
+Response:
+{
+  "status": "created",
+  "application": {...},
+  "api_key": {
+    "api_key_id": "uuid",
+    "application_id": "uuid",
+    "name": "production",
+    "key_prefix": "sk_live_...",
+    "key": "sk_live_..."
+  }
+} - 201
+
+
+GET /v1/developer/apps
+----------------------
+Purpose: List applications owned by the signed-in developer.
+
+
+GET /v1/developer/apps/<application_id>/api-keys
+------------------------------------------------
+Purpose: List API keys for an application owned by the signed-in developer.
+
+
+POST /v1/developer/apps/<application_id>/api-keys
+-------------------------------------------------
+Purpose: Create another API key for an application owned by the signed-in
+         developer. The full key is returned once.
+
+
+POST /v1/developer/api-keys/<api_key_id>/revoke
+-----------------------------------------------
+Purpose: Revoke an API key belonging to one of the signed-in developer's apps.
 
 
 POST /v1/app-registrations
