@@ -57,20 +57,20 @@ class CadenceModelService:
     def score_login_attempt(
         self,
         supabase,
-        username,
+        user_id,
         raw_data,
         login_attempt_id=None,
     ):
         try:
             current_sample = self.raw_data_to_sample(raw_data)
             enrollment_samples = self.fetch_enrollment_samples(
-                supabase, username, login_attempt_id
+                supabase, user_id, login_attempt_id
             )
             if not enrollment_samples:
                 return None
             return self.score_against_enrollment(current_sample, enrollment_samples)
         except Exception:
-            logger.exception("Model scoring failed for username=%s", username)
+            logger.exception("Model scoring failed for user_id=%s", user_id)
             return None
 
     def score_against_enrollment(self, current_sample, enrollment_samples):
@@ -92,11 +92,11 @@ class CadenceModelService:
         scores = result.numpy().reshape(-1)
         return float(np.mean(scores))
 
-    def fetch_enrollment_samples(self, supabase, username, login_attempt_id=None):
+    def fetch_enrollment_samples(self, supabase, user_id, login_attempt_id=None):
         query = (
             supabase.table("login_attempts")
             .select("login_attempt_id, raw_data")
-            .eq("username", username)
+            .eq("user_id", user_id)
             .eq("successful_login", True)
             .order("login_number", desc=True)
             .limit(self.enrollment_limit)

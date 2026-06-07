@@ -1251,7 +1251,7 @@ def authenticate():
         )
 
     # get the score from ML engine 
-    score = get_score(username, raw_data, login_attempt_id)
+    score = get_score(user_id, raw_data, login_attempt_id)
     app.logger.info("score: %s", score)
     print("score =", score, flush=True)
     
@@ -1647,7 +1647,6 @@ def create_login_attempt(supabase, user_id, username, raw_data, events_hash=None
     new_attempt = {
         "login_attempt_id": login_attempt_id,
         "user_id": user_id,
-        "username": username,
         "login_number": login_number,
         "two_fa_invoked": False,
         "successful_login": None,
@@ -1668,10 +1667,10 @@ def create_login_attempt(supabase, user_id, username, raw_data, events_hash=None
     return login_attempt_id
 
 # call ML engine and return the score given
-def get_score(username, raw_data, login_attempt_id=None):
+def get_score(user_id, raw_data, login_attempt_id=None):
     return model_service.score_login_attempt(
         supabase,
-        username,
+        user_id,
         raw_data,
         login_attempt_id=login_attempt_id,
     )
