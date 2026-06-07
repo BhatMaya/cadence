@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createCapture } from '../vendor/index.js';
 
-const VIEWS = ['landing', 'developer', 'register', 'login', 'twofa', 'dashboard'];
+const VIEWS = ['landing', 'register', 'login', 'twofa', 'dashboard'];
 const VIEW_SET = new Set(VIEWS);
 
 function readRouteFromLocation() {
@@ -34,7 +34,50 @@ function isMobileDevice() {
          window.matchMedia('(pointer: coarse)').matches;
 }
 
-// Hash the password client-side before it ever leaves the browser.
+function hasSubtleCrypto() {
+  return typeof crypto !== 'undefined' && crypto.subtle;
+}
+
+// Convert a PEM string (-----BEGIN PUBLIC KEY----- ... -----END PUBLIC KEY-----)
+// into a raw ArrayBuffer suitable for crypto.subtle.importKey.
+function pemToBuffer(pem) {
+  // Strip literal \n sequences (Vercel env var mangling) as well as real
+  // whitespace before decoding - both can corrupt the base64 if left in.
+  const b64 = pem
+    .replace(/\\n/g, '')
+    .replace(/-----[^-]+-----/g, '')
+    .replace(/\s+/g, '');
+  const binary = atob(b64);
+  const buf = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+  return buf.buffer;
+}
+
+// Hybrid RSA-OAEP + AES-256-GCM encryption.
+// RSA alone can't encrypt arbitrary-length data, so we generate an ephemeral
+// AES key per request, encrypt the events JSON with it, then wrap the AES key
+// with the server's RSA public key. Only the server's private key can unwrap it.
+async function encryptEvents(events, rsaCryptoKey) {
+  const aesKey = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    aesKey,
+    new TextEncoder().encode(JSON.stringify(events))
+  );
+  const rawAesKey = await crypto.subtle.exportKey('raw', aesKey);
+  const encryptedKey = await crypto.subtle.encrypt(
+    { name: 'RSA-OAEP' }, rsaCryptoKey, rawAesKey
+  );
+  const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  return {
+    encrypted_key: toB64(encryptedKey),
+    iv:            toB64(iv),
+    ciphertext:    toB64(ciphertext),
+  };
+}
 
 function Status({ value }) {
   const kind = value?.kind ? ` is-${value.kind}` : '';
@@ -74,24 +117,10 @@ function Enrollment({ payload }) {
 export default function SynergyzeApp({ initialRoute = 'landing' }) {
   const [view, setView] = useState(VIEW_SET.has(initialRoute) ? initialRoute : 'landing');
   const [statuses, setStatuses] = useState({
-    developer: { message: '', kind: '' },
     register: { message: '', kind: '' },
     login: { message: '', kind: '' },
     twofa: { message: '', kind: '' }
   });
-  const [developerConfig, setDeveloperConfig] = useState({
-    apiBase: '',
-    adminToken: ''
-  });
-  const [developerApps, setDeveloperApps] = useState([]);
-  const [developerRegistrations, setDeveloperRegistrations] = useState([]);
-  const [selectedDeveloperAppId, setSelectedDeveloperAppId] = useState('');
-  const [developerKeys, setDeveloperKeys] = useState([]);
-  const [newDeveloperKey, setNewDeveloperKey] = useState(null);
-  const [newDeveloperLookup, setNewDeveloperLookup] = useState(null);
-  const [developerRequestStatus, setDeveloperRequestStatus] = useState(null);
-  const [developerUsage, setDeveloperUsage] = useState(null);
-  const [developerLoading, setDeveloperLoading] = useState(false);
   const [demoOtp, setDemoOtp] = useState(null);
   const [dashboardSub, setDashboardSub] = useState(
     'Welcome back. The paradigm has been shifted on your behalf.'
@@ -105,19 +134,9 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
   const loginUsernameRef = useRef(null);
   const loginPasswordRef = useRef(null);
   const twofaCodeRef = useRef(null);
-  const developerAppNameRef = useRef(null);
-  const developerSlugRef = useRef(null);
-  const developerOriginsRef = useRef(null);
-  const developerKeyNameRef = useRef(null);
-  const developerRequestNameRef = useRef(null);
-  const developerRequestEmailRef = useRef(null);
-  const developerRequestSlugRef = useRef(null);
-  const developerRequestOriginsRef = useRef(null);
-  const developerRequestUseCaseRef = useRef(null);
-  const developerStatusIdRef = useRef(null);
-  const developerStatusTokenRef = useRef(null);
   const activeCaptureRef = useRef(null);
   const pendingAuthRef = useRef({ username: null, loginAttemptId: null });
+  const rsaPublicKeyRef = useRef(null);
 
 
   const setStatus = useCallback((form, message, kind = '') => {
@@ -204,125 +223,6 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
     return { ok: res.ok, status: res.status, json };
   }, []);
 
-  const developerApi = useCallback(async (path, { method = 'GET', body } = {}) => {
-    const apiBase = developerConfig.apiBase || getApiBase();
-    const token = developerConfig.adminToken.trim();
-    if (!token) {
-      throw new Error('Enter an admin token first.');
-    }
-
-    const res = await fetch(`${apiBase.replace(/\/+$/, '')}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
-
-    let json;
-    try {
-      json = await res.json();
-    } catch {
-      json = { status: 'error', message: `bad response (${res.status})` };
-    }
-    if (!res.ok) {
-      throw new Error(json.message || `Request failed (${res.status})`);
-    }
-    return json;
-  }, [developerConfig]);
-
-  const publicPlatformApi = useCallback(async (path, body) => {
-    const apiBase = (developerConfig.apiBase || getApiBase()).replace(/\/+$/, '');
-    const res = await fetch(`${apiBase}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    let json;
-    try {
-      json = await res.json();
-    } catch {
-      json = { status: 'error', message: `bad response (${res.status})` };
-    }
-    if (!res.ok) {
-      throw new Error(json.message || `Request failed (${res.status})`);
-    }
-    return json;
-  }, [developerConfig.apiBase]);
-
-  const refreshDeveloperApps = useCallback(async (preferredAppId = selectedDeveloperAppId) => {
-    setDeveloperLoading(true);
-    setStatus('developer', 'Loading applications...');
-    try {
-      const json = await developerApi('/v1/apps');
-      const apps = json.applications || [];
-      setDeveloperApps(apps);
-      const nextSelected =
-        apps.find((app) => app.application_id === preferredAppId)?.application_id ||
-        apps[0]?.application_id ||
-        '';
-      setSelectedDeveloperAppId(nextSelected);
-      setStatus('developer', apps.length ? 'Applications loaded.' : 'No applications registered yet.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  }, [developerApi, selectedDeveloperAppId, setStatus]);
-
-  const refreshDeveloperRegistrations = useCallback(async () => {
-    setDeveloperLoading(true);
-    setStatus('developer', 'Loading registration requests...');
-    try {
-      const json = await developerApi('/v1/app-registrations');
-      setDeveloperRegistrations(json.registrations || []);
-      setStatus('developer', 'Registration requests loaded.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  }, [developerApi, setStatus]);
-
-  const refreshDeveloperKeys = useCallback(async (applicationId = selectedDeveloperAppId) => {
-    if (!applicationId) {
-      setDeveloperKeys([]);
-      return;
-    }
-    setDeveloperLoading(true);
-    setStatus('developer', 'Loading API keys...');
-    try {
-      const json = await developerApi(`/v1/apps/${encodeURIComponent(applicationId)}/api-keys`);
-      setDeveloperKeys(json.api_keys || []);
-      setStatus('developer', 'API keys loaded.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  }, [developerApi, selectedDeveloperAppId, setStatus]);
-
-  const refreshDeveloperUsage = useCallback(async (applicationId = selectedDeveloperAppId) => {
-    if (!applicationId) {
-      setDeveloperUsage(null);
-      return;
-    }
-    setDeveloperLoading(true);
-    setStatus('developer', 'Loading usage...');
-    try {
-      const json = await developerApi(`/v1/apps/${encodeURIComponent(applicationId)}/usage`);
-      setDeveloperUsage(json.usage || null);
-      setStatus('developer', 'Usage loaded.', 'success');
-    } catch (err) {
-      setDeveloperUsage(null);
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  }, [developerApi, selectedDeveloperAppId, setStatus]);
-
   const goToDashboard = useCallback((message, payload, username = null) => {
     if (message) setDashboardSub(message);
     setEnrollment(payload);
@@ -332,12 +232,18 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
 
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    setDeveloperConfig({
-      apiBase: window.localStorage.getItem('cadence.developer_api_base') || getApiBase(),
-      adminToken: window.localStorage.getItem('cadence.admin_token') || ''
-    });
+    if (!hasSubtleCrypto()) return;
+    fetch(`${getApiBase()}/public-key`)
+      .then(r => r.json())
+      .then(({ public_key }) => crypto.subtle.importKey(
+        'spki', pemToBuffer(public_key),
+        { name: 'RSA-OAEP', hash: 'SHA-256' },
+        false, ['encrypt']
+      ))
+      .then(key => { rsaPublicKeyRef.current = key; })
+      .catch((err) => { console.error('RSA key import failed:', err); });
   }, []);
+
 
   useEffect(() => {
     const syncRoute = () => showView(readRouteFromLocation(), { replace: true });
@@ -364,236 +270,6 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
   }, [attachCapture, teardownCapture, view]);
 
   useEffect(() => teardownCapture, [teardownCapture]);
-
-  useEffect(() => {
-    if (selectedDeveloperAppId) {
-      refreshDeveloperKeys(selectedDeveloperAppId);
-      refreshDeveloperUsage(selectedDeveloperAppId);
-    } else {
-      setDeveloperKeys([]);
-      setDeveloperUsage(null);
-    }
-  }, [refreshDeveloperKeys, refreshDeveloperUsage, selectedDeveloperAppId]);
-
-  const updateDeveloperConfig = (field) => (ev) => {
-    const value = ev.target.value;
-    setDeveloperConfig((current) => {
-      const next = { ...current, [field]: value };
-      if (typeof window !== 'undefined') {
-        if (field === 'apiBase') {
-          window.localStorage.setItem('cadence.developer_api_base', value);
-        }
-        if (field === 'adminToken') {
-          window.localStorage.setItem('cadence.admin_token', value);
-        }
-      }
-      return next;
-    });
-  };
-
-  const handleCreateDeveloperApp = async (ev) => {
-    ev.preventDefault();
-    const name = developerAppNameRef.current.value.trim();
-    const slug = developerSlugRef.current.value.trim();
-    const origins = developerOriginsRef.current.value
-      .split(/\n|,/)
-      .map((origin) => origin.trim())
-      .filter(Boolean);
-
-    if (!name) {
-      setStatus('developer', 'Application name is required.', 'error');
-      return;
-    }
-
-    setDeveloperLoading(true);
-    setNewDeveloperKey(null);
-    setStatus('developer', 'Registering application...');
-    try {
-      const body = { name, allowed_origins: origins };
-      if (slug) body.slug = slug;
-      const json = await developerApi('/v1/apps', { method: 'POST', body });
-      developerAppNameRef.current.value = '';
-      developerSlugRef.current.value = '';
-      developerOriginsRef.current.value = '';
-      setSelectedDeveloperAppId(json.application.application_id);
-      await refreshDeveloperApps(json.application.application_id);
-      setStatus('developer', 'Application registered.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleSubmitDeveloperRequest = async (ev) => {
-    ev.preventDefault();
-    const name = developerRequestNameRef.current.value.trim();
-    const contactEmail = developerRequestEmailRef.current.value.trim();
-    const slug = developerRequestSlugRef.current.value.trim();
-    const origins = developerRequestOriginsRef.current.value
-      .split(/\n|,/)
-      .map((origin) => origin.trim())
-      .filter(Boolean);
-    const useCase = developerRequestUseCaseRef.current.value.trim();
-
-    if (!name || !contactEmail) {
-      setStatus('developer', 'Application name and contact email are required.', 'error');
-      return;
-    }
-
-    setDeveloperLoading(true);
-    setStatus('developer', 'Submitting registration request...');
-    try {
-      const body = {
-        name,
-        contact_email: contactEmail,
-        allowed_origins: origins,
-        use_case: useCase
-      };
-      if (slug) body.slug = slug;
-      const json = await publicPlatformApi('/v1/app-registrations', body);
-      setNewDeveloperLookup({
-        appRegistrationId: json.registration.app_registration_id,
-        lookupToken: json.lookup_token
-      });
-      setDeveloperRequestStatus(json.registration);
-      developerRequestNameRef.current.value = '';
-      developerRequestEmailRef.current.value = '';
-      developerRequestSlugRef.current.value = '';
-      developerRequestOriginsRef.current.value = '';
-      developerRequestUseCaseRef.current.value = '';
-      setStatus(
-        'developer',
-        `Registration request submitted (${json.registration.app_registration_id}).`,
-        'success'
-      );
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleLookupDeveloperRequest = async (ev) => {
-    ev.preventDefault();
-    const registrationId = developerStatusIdRef.current.value.trim();
-    const lookupToken = developerStatusTokenRef.current.value.trim();
-    if (!registrationId || !lookupToken) {
-      setStatus('developer', 'Registration ID and lookup token are required.', 'error');
-      return;
-    }
-
-    setDeveloperLoading(true);
-    setStatus('developer', 'Checking registration status...');
-    try {
-      const apiBase = (developerConfig.apiBase || getApiBase()).replace(/\/+$/, '');
-      const res = await fetch(
-        `${apiBase}/v1/app-registrations/${encodeURIComponent(registrationId)}/status`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${lookupToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      let json;
-      try {
-        json = await res.json();
-      } catch {
-        json = { status: 'error', message: `bad response (${res.status})` };
-      }
-      if (!res.ok) {
-        throw new Error(json.message || `Request failed (${res.status})`);
-      }
-      setDeveloperRequestStatus(json.registration);
-      setStatus('developer', `Registration is ${json.registration.status}.`, 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleCreateDeveloperKey = async (ev) => {
-    ev.preventDefault();
-    if (!selectedDeveloperAppId) {
-      setStatus('developer', 'Select an application first.', 'error');
-      return;
-    }
-    const name = developerKeyNameRef.current.value.trim() || 'default';
-    setDeveloperLoading(true);
-    setNewDeveloperKey(null);
-    setStatus('developer', 'Creating API key...');
-    try {
-      const json = await developerApi(
-        `/v1/apps/${encodeURIComponent(selectedDeveloperAppId)}/api-keys`,
-        { method: 'POST', body: { name } }
-      );
-      setNewDeveloperKey(json.api_key);
-      developerKeyNameRef.current.value = '';
-      await refreshDeveloperKeys(selectedDeveloperAppId);
-      await refreshDeveloperUsage(selectedDeveloperAppId);
-      setStatus('developer', 'API key created. Copy it now; Cadence will not show it again.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleRevokeDeveloperKey = async (apiKeyId) => {
-    setDeveloperLoading(true);
-    setStatus('developer', 'Revoking API key...');
-    try {
-      await developerApi(`/v1/api-keys/${encodeURIComponent(apiKeyId)}/revoke`, {
-        method: 'POST'
-      });
-      await refreshDeveloperKeys(selectedDeveloperAppId);
-      await refreshDeveloperUsage(selectedDeveloperAppId);
-      setStatus('developer', 'API key revoked.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleApproveDeveloperRegistration = async (registrationId) => {
-    setDeveloperLoading(true);
-    setNewDeveloperKey(null);
-    setStatus('developer', 'Approving registration...');
-    try {
-      const json = await developerApi(`/v1/app-registrations/${encodeURIComponent(registrationId)}/approve`, {
-        method: 'POST',
-        body: { key_name: 'production' }
-      });
-      setNewDeveloperKey(json.api_key);
-      await refreshDeveloperRegistrations();
-      await refreshDeveloperApps(json.application.application_id);
-      setStatus('developer', 'Registration approved. Copy the new API key now.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
-
-  const handleRejectDeveloperRegistration = async (registrationId) => {
-    setDeveloperLoading(true);
-    setStatus('developer', 'Rejecting registration...');
-    try {
-      await developerApi(`/v1/app-registrations/${encodeURIComponent(registrationId)}/reject`, {
-        method: 'POST'
-      });
-      await refreshDeveloperRegistrations();
-      setStatus('developer', 'Registration rejected.', 'success');
-    } catch (err) {
-      setStatus('developer', err.message, 'error');
-    } finally {
-      setDeveloperLoading(false);
-    }
-  };
 
   const handleRegister = async (ev) => {
     ev.preventDefault();
@@ -651,8 +327,16 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
       return;
     }
     const events = sample ? sample.events : [];
-    // Encrypt the keystroke events with the server's RSA public key before
-    const raw_data = { events };
+    // Encrypt keystroke events when WebCrypto is available. Plain HTTP on a
+    // LAN/Tailscale IP is not a secure browser context, so local demo mode
+    // falls back to raw events; the backend accepts that only in demo mode.
+    if (hasSubtleCrypto() && !rsaPublicKeyRef.current) {
+      setStatus('login', 'Encryption key not ready — please try again.', 'error');
+      return;
+    }
+    const raw_data = hasSubtleCrypto()
+      ? await encryptEvents(events, rsaPublicKeyRef.current)
+      : { events };
     const is_mobile = isMobileDevice();
 
     setStatus('login', 'Analyzing your typing rhythm...');
@@ -789,7 +473,7 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
       });
       if (json.status === 'code sent') {
         setDemoOtp(json.demo_otp || null);
-        setStatus('twofa', 'New code sent.', 'success');
+        setStatus('twofa', json.demo_otp ? 'New code generated.' : 'New code sent.', 'success');
       } else {
         setStatus('twofa', json.message || 'Could not resend.', 'error');
       }
@@ -828,15 +512,11 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
         </a>
         <nav className="nav-links">
           <a href="/#features">Features</a>
-          <a href="/developer" onClick={routeTo('developer')}>Developers</a>
           <a href="/#social">Trusted By</a>
           <a href="/#pricing">Pricing</a>
           <a href="/#manifesto">Manifesto</a>
         </nav>
         <div className="nav-cta">
-          <a className="btn btn-ghost" href="/developer" onClick={routeTo('developer')}>
-            Developer console
-          </a>
           <a className="btn btn-ghost" href="/login" onClick={routeTo('login')}>Sign in</a>
           <a className="btn btn-primary" href="/register" onClick={routeTo('register')}>
             Start free trial
@@ -1005,406 +685,6 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
           </footer>
         </section>
 
-        <section className="route route-developer" data-route-view="developer" hidden={view !== 'developer'}>
-          <div className="developer-shell">
-            <header className="developer-header">
-              <a className="auth-back developer-back" href="/" onClick={routeTo('landing')}>← back to home</a>
-              <p className="eyebrow">Cadence platform</p>
-              <h1>Register apps and manage typing-analysis keys</h1>
-              <p>
-                Create an application, restrict browser origins, issue a server-side API key, and
-                connect the npm package to the model scoring API.
-              </p>
-            </header>
-
-            <div className="developer-grid">
-              <section className="developer-panel developer-panel-wide">
-                <h2>Request developer access</h2>
-                <form className="developer-request-grid" onSubmit={handleSubmitDeveloperRequest}>
-                  <label className="field">
-                    <span className="field-label">Application name</span>
-                    <input
-                      ref={developerRequestNameRef}
-                      type="text"
-                      placeholder="Acme dashboard"
-                      autoComplete="organization"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Contact email</span>
-                    <input
-                      ref={developerRequestEmailRef}
-                      type="email"
-                      placeholder="dev@company.com"
-                      autoComplete="email"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Preferred slug</span>
-                    <input
-                      ref={developerRequestSlugRef}
-                      type="text"
-                      placeholder="acme-dashboard"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Allowed origins</span>
-                    <textarea
-                      ref={developerRequestOriginsRef}
-                      placeholder="https://app.example.com&#10;https://staging.example.com"
-                      rows={4}
-                    />
-                  </label>
-                  <label className="field developer-field-wide">
-                    <span className="field-label">Use case</span>
-                    <textarea
-                      ref={developerRequestUseCaseRef}
-                      placeholder="Where will Cadence score typing samples in your app?"
-                      rows={4}
-                    />
-                  </label>
-                  <button type="submit" className="btn btn-primary" disabled={developerLoading}>
-                    Submit request <span className="arrow">→</span>
-                  </button>
-                </form>
-
-                {newDeveloperLookup && (
-                  <div className="developer-secret developer-secret-spaced">
-                    <span>Registration lookup token</span>
-                    <code>{newDeveloperLookup.lookupToken}</code>
-                    <small>Request ID: {newDeveloperLookup.appRegistrationId}</small>
-                  </div>
-                )}
-
-                <form className="developer-status-form" onSubmit={handleLookupDeveloperRequest}>
-                  <label className="field">
-                    <span className="field-label">Registration ID</span>
-                    <input
-                      ref={developerStatusIdRef}
-                      type="text"
-                      placeholder="app registration uuid"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Lookup token</span>
-                    <input
-                      ref={developerStatusTokenRef}
-                      type="password"
-                      placeholder="reg_status_..."
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button type="submit" className="btn btn-ghost" disabled={developerLoading}>
-                    Check status
-                  </button>
-                </form>
-
-                {developerRequestStatus && (
-                  <div className="developer-status-card">
-                    <span className={`developer-registration-status is-${developerRequestStatus.status}`}>
-                      {developerRequestStatus.status}
-                    </span>
-                    <strong>{developerRequestStatus.name}</strong>
-                    <small>{developerRequestStatus.application_id || developerRequestStatus.app_registration_id}</small>
-                  </div>
-                )}
-              </section>
-
-              <section className="developer-panel">
-                <h2>Connection</h2>
-                <div className="developer-form">
-                  <label className="field">
-                    <span className="field-label">API base URL</span>
-                    <input
-                      type="url"
-                      value={developerConfig.apiBase}
-                      onChange={updateDeveloperConfig('apiBase')}
-                      placeholder="https://api.example.com"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Admin token</span>
-                    <input
-                      type="password"
-                      value={developerConfig.adminToken}
-                      onChange={updateDeveloperConfig('adminToken')}
-                      placeholder="cadence admin token"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-block"
-                    onClick={() => refreshDeveloperApps()}
-                    disabled={developerLoading}
-                  >
-                    Load applications
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-block"
-                    onClick={refreshDeveloperRegistrations}
-                    disabled={developerLoading}
-                  >
-                    Load registration requests
-                  </button>
-                </div>
-                <Status value={statuses.developer} />
-              </section>
-
-              <section className="developer-panel">
-                <h2>Register application</h2>
-                <form className="developer-form" onSubmit={handleCreateDeveloperApp}>
-                  <label className="field">
-                    <span className="field-label">Application name</span>
-                    <input
-                      ref={developerAppNameRef}
-                      type="text"
-                      placeholder="Acme dashboard"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Slug</span>
-                    <input
-                      ref={developerSlugRef}
-                      type="text"
-                      placeholder="acme-dashboard"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Allowed origins</span>
-                    <textarea
-                      ref={developerOriginsRef}
-                      placeholder="https://app.example.com&#10;https://staging.example.com"
-                      rows={4}
-                    />
-                  </label>
-                  <button type="submit" className="btn btn-primary btn-block" disabled={developerLoading}>
-                    Register app <span className="arrow">→</span>
-                  </button>
-                </form>
-              </section>
-
-              <section className="developer-panel developer-panel-wide">
-                <div className="developer-panel-head">
-                  <h2>Registration requests</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={refreshDeveloperRegistrations}
-                    disabled={developerLoading}
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                <div className="developer-table">
-                  {developerRegistrations.length === 0 ? (
-                    <p className="developer-empty">No registration requests loaded.</p>
-                  ) : developerRegistrations.map((registration) => (
-                    <div className="developer-registration-row" key={registration.app_registration_id}>
-                      <span>
-                        <strong>{registration.name}</strong>
-                        <small>{registration.contact_email} · {registration.slug}</small>
-                      </span>
-                      <span className={`developer-registration-status is-${registration.status}`}>
-                        {registration.status}
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => handleApproveDeveloperRegistration(registration.app_registration_id)}
-                        disabled={developerLoading || registration.status !== 'pending'}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => handleRejectDeveloperRegistration(registration.app_registration_id)}
-                        disabled={developerLoading || registration.status !== 'pending'}
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="developer-panel developer-panel-wide">
-                <div className="developer-panel-head">
-                  <h2>Applications</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => refreshDeveloperApps()}
-                    disabled={developerLoading}
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                <div className="developer-list">
-                  {developerApps.length === 0 ? (
-                    <p className="developer-empty">No applications loaded.</p>
-                  ) : developerApps.map((app) => (
-                    <button
-                      type="button"
-                      className={`developer-app-row${app.application_id === selectedDeveloperAppId ? ' is-active' : ''}`}
-                      key={app.application_id}
-                      onClick={() => setSelectedDeveloperAppId(app.application_id)}
-                    >
-                      <span>
-                        <strong>{app.name}</strong>
-                        <small>{app.slug || app.application_id}</small>
-                      </span>
-                      <code>{app.application_id}</code>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="developer-panel developer-panel-wide">
-                <div className="developer-panel-head">
-                  <h2>Usage</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => refreshDeveloperUsage()}
-                    disabled={developerLoading || !selectedDeveloperAppId}
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                {!developerUsage ? (
-                  <p className="developer-empty">No usage loaded for the selected application.</p>
-                ) : (
-                  <div className="developer-usage-grid">
-                    <div className="developer-usage-tile">
-                      <span>Active keys</span>
-                      <strong>{developerUsage.api_keys.active}</strong>
-                      <small>{developerUsage.api_keys.revoked} revoked</small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>End users</span>
-                      <strong>{developerUsage.end_users.total}</strong>
-                      <small>{developerUsage.end_users.enrolled} enrolled</small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>Samples</span>
-                      <strong>{developerUsage.typing_samples.total}</strong>
-                      <small>{developerUsage.typing_samples.enrollment} enrollment</small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>Scores</span>
-                      <strong>{developerUsage.score_requests.total}</strong>
-                      <small>{developerUsage.score_requests.accepted} accepted</small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>Accept rate</span>
-                      <strong>
-                        {developerUsage.score_requests.acceptance_rate === null
-                          ? '-'
-                          : `${Math.round(developerUsage.score_requests.acceptance_rate * 100)}%`}
-                      </strong>
-                      <small>{developerUsage.score_requests.rejected} rejected</small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>Avg score</span>
-                      <strong>
-                        {developerUsage.score_requests.avg_score_duration_ms == null
-                          ? '-'
-                          : `${Math.round(developerUsage.score_requests.avg_score_duration_ms)}ms`}
-                      </strong>
-                      <small>
-                        p95 {developerUsage.score_requests.p95_score_duration_ms == null
-                          ? '-'
-                          : `${Math.round(developerUsage.score_requests.p95_score_duration_ms)}ms`}
-                      </small>
-                    </div>
-                    <div className="developer-usage-tile">
-                      <span>Top reason</span>
-                      <strong>
-                        {Object.entries(developerUsage.score_requests.reason_counts || {})
-                          .sort((left, right) => right[1] - left[1])[0]?.[0] || '-'}
-                      </strong>
-                      <small>score decisions</small>
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <section className="developer-panel developer-panel-wide">
-                <div className="developer-panel-head">
-                  <h2>API keys</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => refreshDeveloperKeys()}
-                    disabled={developerLoading || !selectedDeveloperAppId}
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                {newDeveloperKey && (
-                  <div className="developer-secret">
-                    <span>New API key</span>
-                    <code>{newDeveloperKey.key}</code>
-                  </div>
-                )}
-
-                <form className="developer-key-form" onSubmit={handleCreateDeveloperKey}>
-                  <label className="field">
-                    <span className="field-label">Key name</span>
-                    <input
-                      ref={developerKeyNameRef}
-                      type="text"
-                      placeholder="production"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    disabled={developerLoading || !selectedDeveloperAppId}
-                  >
-                    Create key
-                  </button>
-                </form>
-
-                <div className="developer-table">
-                  {developerKeys.length === 0 ? (
-                    <p className="developer-empty">No keys for the selected application.</p>
-                  ) : developerKeys.map((key) => (
-                    <div className="developer-key-row" key={key.api_key_id}>
-                      <span>
-                        <strong>{key.name}</strong>
-                        <small>{key.key_prefix}</small>
-                      </span>
-                      <span className={key.revoked_at ? 'developer-key-revoked' : 'developer-key-live'}>
-                        {key.revoked_at ? 'revoked' : 'live'}
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => handleRevokeDeveloperKey(key.api_key_id)}
-                        disabled={developerLoading || Boolean(key.revoked_at)}
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-          </div>
-        </section>
-
         <section className="route route-auth" data-route-view="register" hidden={view !== 'register'}>
           <div className="auth-card">
             <a className="auth-back" href="/" onClick={routeTo('landing')}>← back to home</a>
@@ -1553,7 +833,11 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
           <div className="auth-card">
             <a className="auth-back" href="/login" onClick={routeTo('login')}>← back to sign in</a>
             <h1 className="auth-title">Verify it's you</h1>
-            <p className="auth-sub">We sent a 6-digit code to your email. It's good for 5 minutes.</p>
+            <p className="auth-sub">
+              {demoOtp
+                ? "Use the 6-digit code shown below. It's good for 5 minutes."
+                : "We sent a 6-digit code to your email. It's good for 5 minutes."}
+            </p>
             <p className="auth-sub">Don't worry - we don't care how you type this part.</p>
 
             <div className="demo-banner" id="demo-banner" hidden={!demoOtp}>
@@ -1587,7 +871,9 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
               <Status value={statuses.twofa} />
 
               <p className="auth-switch">
-                Didn't get it? <a href="#" id="twofa-resend" onClick={handleResend}>Resend code</a>
+                Need another one? <a href="#" id="twofa-resend" onClick={handleResend}>
+                  {demoOtp ? 'Generate code' : 'Resend code'}
+                </a>
               </p>
             </form>
           </div>

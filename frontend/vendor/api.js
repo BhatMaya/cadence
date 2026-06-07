@@ -18,30 +18,6 @@ export class CadenceClient {
         this.apiKey = options.apiKey;
         this.fetchImpl = options.fetchImpl ?? fetch;
     }
-    createEndUser(request) {
-        return this.request('/v1/end-users', {
-            method: 'POST',
-            body: request
-        });
-    }
-    getEndUser(externalUserId) {
-        if (!externalUserId) {
-            throw new TypeError('CadenceClient.getEndUser: externalUserId is required');
-        }
-        return this.request(`/v1/end-users/${encodeURIComponent(externalUserId)}`);
-    }
-    enroll(request) {
-        return this.request('/v1/enroll', {
-            method: 'POST',
-            body: request
-        });
-    }
-    score(request) {
-        return this.request('/v1/score', {
-            method: 'POST',
-            body: request
-        });
-    }
     async request(path, init = {}) {
         const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
             method: init.method ?? 'GET',
@@ -81,19 +57,17 @@ export async function getAppRegistrationStatus(options, appRegistrationId) {
     if (!options.apiBaseUrl) {
         throw new TypeError('getAppRegistrationStatus: apiBaseUrl is required');
     }
-    if (!options.lookupToken) {
-        throw new TypeError('getAppRegistrationStatus: lookupToken is required');
-    }
     if (!appRegistrationId) {
         throw new TypeError('getAppRegistrationStatus: appRegistrationId is required');
     }
     const fetchImpl = options.fetchImpl ?? fetch;
+    const headers = { 'Content-Type': 'application/json' };
+    if (options.lookupToken) {
+        headers.Authorization = `Bearer ${options.lookupToken}`;
+    }
     const response = await fetchImpl(`${options.apiBaseUrl.replace(/\/+$/, '')}/v1/app-registrations/${encodeURIComponent(appRegistrationId)}/status`, {
         method: 'GET',
-        headers: {
-            Authorization: `Bearer ${options.lookupToken}`,
-            'Content-Type': 'application/json'
-        }
+        headers
     });
     const body = await parseResponseBody(response);
     if (!response.ok) {
