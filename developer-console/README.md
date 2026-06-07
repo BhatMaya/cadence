@@ -10,8 +10,8 @@ With the console you can:
 - Sign up / log in as a developer (Supabase-backed auth via the Cadence API)
 - Create and browse your applications
 - Issue and revoke server-side API keys (`sk_live_…`)
-- View per-app usage metrics (keys, end users, typing samples, scoring)
-- Read app-specific integration docs for `/v1/enroll` and `/v1/score`
+- View per-app API key and approval status
+- Read app-specific integration notes for Cadence-owned auth flows
 
 ## Tech stack
 
@@ -76,10 +76,10 @@ sent as `Authorization: Bearer <developer-access-token>`.
 3. **API keys** — list, create (`POST …/api-keys`), and revoke
    (`POST /v1/developer/api-keys/:id/revoke`). The list only ever shows key
    metadata and the prefix — never the full secret.
-4. **Usage** — `GET /v1/developer/apps/:id/usage` powers the metrics dashboard.
-5. **Integration docs** — a per-app panel with copyable `curl` examples for
-   `/v1/enroll` and `/v1/score`, and guidance to keep `sk_live_` keys
-   server-side only.
+4. **Usage** — `GET /v1/developer/apps/:id/usage` powers the app/API-key
+   overview.
+5. **Integration docs** — a per-app panel that explains the current
+   Cadence-owned auth model and server-side API key handling.
 
 ## Security notes
 
@@ -87,9 +87,7 @@ sent as `Authorization: Bearer <developer-access-token>`.
   Supabase auth token for managing your account. It is **not** an `sk_live_`
   API key.
 - Server-side API keys (`sk_live_…`) must **never** be embedded in browser or
-  mobile client code. Browser apps should capture typing samples client-side,
-  send them to their own backend, and have that backend call Cadence with the
-  API key.
+  mobile client code.
 
 ## Project structure
 
