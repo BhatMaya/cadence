@@ -602,7 +602,7 @@ def enrollment_payload(enrollment_count):
     }
 
 
-def require_2fa(user_id, username, login_attempt_id, enrollment_count, reason):
+def require_2fa(user_id, login_attempt_id, enrollment_count, reason):
     supabase.table("user_profiles") \
         .update({"current_login_status": "pending 2fa"}) \
         .eq("user_id", user_id) \
@@ -617,7 +617,7 @@ def require_2fa(user_id, username, login_attempt_id, enrollment_count, reason):
     # test mode), roll back the pending state so the user can retry
     # instead of getting wedged into "previous login still pending".
     try:
-        otp = send_code(user_id, username, login_attempt_id)
+        otp = send_code(user_id, login_attempt_id)
     except Exception as exc:
         app.logger.exception("send_code failed; rolling back pending 2fa")
         supabase.table("user_profiles") \
@@ -1508,7 +1508,7 @@ def authenticate():
         # Wrong password: increment the failure counter and, if the threshold
         # is reached, lock the account and email an unlock code to the owner.
         lock_info = _handle_failed_password(
-            user_id, username,
+            user_id,
             user_profile.get("failed_password_attempts", 0),
         )
         if lock_info:
@@ -1527,14 +1527,13 @@ def authenticate():
 
     # create new login attempt w user info
     enrollment_count = count_successful_login_attempts(user_id)
-    login_attempt_id = create_login_attempt(supabase, user_id, username, raw_data, events_hash=events_hash)
+    login_attempt_id = create_login_attempt(supabase, user_id, raw_data, events_hash=events_hash)
     if login_attempt_id == None:
         return jsonify({"status": "can't verify login"}), 200
 
     if enrollment_count < REQUIRED_ENROLLMENT_SAMPLES:
         return require_2fa(
             user_id,
-            username,
             login_attempt_id,
             enrollment_count,
             "enrollment_required",
@@ -1545,7 +1544,6 @@ def authenticate():
     if is_mobile:
         return require_2fa(
             user_id,
-            username,
             login_attempt_id,
             enrollment_count,
             "mobile_device",
@@ -1590,7 +1588,6 @@ def authenticate():
     else:
         return require_2fa(
             user_id,
-            username,
             login_attempt_id,
             enrollment_count,
             "low_confidence",
@@ -1627,14 +1624,10 @@ def logout():
 @app.post("/code_verification")
 def code_verification():
     data = request.json
-    username = data.get("username")
     code = data.get("code")
     login_attempt_id = data.get("login_attempt_id")
 
-    # error handling 
-    if not username:
-        return jsonify({"status": "error", "message": "missing username"}), 400
-
+    # error handling
     if not code:
         return jsonify({"status": "error", "message": "missing code"}), 400
 
@@ -1745,13 +1738,9 @@ def code_verification():
 @app.post("/resend_code")
 def resend_code():
     data = request.json
-    username = data.get("username")
     login_attempt_id = data.get("login_attempt_id")
 
     # error handling
-    if not username:
-        return jsonify({"status": "error", "message": "missing username"}), 400
-
     if not login_attempt_id:
         return jsonify({"status": "error", "message": "missing login_attempt_id"}), 400
 
@@ -1805,7 +1794,7 @@ def resend_code():
     email = email_result.data[0]["email"]
 
     if DEMO_MODE:
-        app.logger.warning("[DEMO_MODE] resent OTP for %s (%s): %s", username, email, otp)
+        app.logger.warning("[DEMO_MODE] resent OTP for user_id=%s (%s): %s", user_id, email, otp)
         return jsonify({"status": "code sent", "demo_otp": otp}), 200
 
     resend.api_key = os.getenv("RESEND_KEY")
@@ -1822,7 +1811,7 @@ def resend_code():
 # Brute-force protection helpers
 # ---------------------------------------------------------------------------
 
-def _handle_failed_password(user_id, username, current_failures):
+def _handle_failed_password(user_id, current_failures):
     # Increment the consecutive wrong-password counter.
     # If the threshold is reached, send an unlock code and set the account to
     # "password_locked" so no further login attempts can proceed until the user
@@ -1842,11 +1831,11 @@ def _handle_failed_password(user_id, username, current_failures):
     # record (send_code requires a login_attempt_id with a matching row),
     # then send the unlock code. If sending fails we leave the account
     # unlocked rather than stranding the user with no way to recover.
-    unlock_attempt_id = create_login_attempt(supabase, user_id, username, {})
+    unlock_attempt_id = create_login_attempt(supabase, user_id, {})
     try:
-        otp = send_code(user_id, username, unlock_attempt_id)
+        otp = send_code(user_id, unlock_attempt_id)
     except Exception:
-        app.logger.exception("send_code failed during password-lock for %s", username)
+        app.logger.exception("send_code failed during password-lock for user_id=%s", user_id)
         return None
 
     supabase.table("user_profiles") \
@@ -1929,7 +1918,7 @@ def _is_replayed_payload(user_id, events_hash):
 
 
 # create new login attempt in DB, return login attempt id
-def create_login_attempt(supabase, user_id, username, raw_data, events_hash=None):
+def create_login_attempt(supabase, user_id, raw_data, events_hash=None):
     login_attempt_id = str(uuid.uuid4())
      # 1. fetch profile
     profile = (
@@ -1978,7 +1967,7 @@ def get_score(user_id, raw_data, login_attempt_id=None):
 
 # generate otp hash, send code to user's email. Returns the plaintext
 # OTP so the caller can surface it in demo mode.
-def send_code(user_id, username, login_attempt_id):
+def send_code(user_id, login_attempt_id):
     email_result = supabase.table("user_profiles") \
         .select("email") \
         .eq("user_id", user_id) \
@@ -2001,7 +1990,6 @@ def send_code(user_id, username, login_attempt_id):
         .insert({
             "login_attempt_id": login_attempt_id,
             "user_id": user_id,
-            "username": username,
             "otp_hash": otp_hash,
             "expires_at": expires_at.isoformat(),
             "attempt_count": 0
@@ -2009,7 +1997,7 @@ def send_code(user_id, username, login_attempt_id):
         .execute()
 
     if DEMO_MODE:
-        app.logger.warning("[DEMO_MODE] OTP for %s (%s): %s", username, email, otp)
+        app.logger.warning("[DEMO_MODE] OTP for user_id=%s (%s): %s", user_id, email, otp)
         return otp
 
     resend.api_key = os.getenv("RESEND_KEY")
