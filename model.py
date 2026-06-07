@@ -21,7 +21,7 @@ class ExponentialManhattanSimilarity(tf.keras.layers.Layer):
         return (input_shape[0][0], 1)
 
 
-def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.01):
+def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.0):
     attention_output = MultiHeadAttention(
         num_heads=num_heads, key_dim=head_size, dropout=dropout
     )(inputs, inputs)
@@ -36,10 +36,10 @@ def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.01
     return x
 
 
-def build_cadence_model(input_shape=(None, 4)):
+def build_cadence_model(input_shape=(None, 3)):
     """
     Builds the Siamese architecture for Keystroke Dynamics.
-    Default input shape expects variable length sequences (None) with 4 features.
+    Default input shape expects variable length sequences with 3 timing features.
     """
     inputs = Input(shape=input_shape)
 
