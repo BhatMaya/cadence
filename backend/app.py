@@ -1432,7 +1432,7 @@ def code_verification():
 
     # Normal 2FA success: mark the login attempt as successful and log in.
     supabase.table("login_attempts") \
-        .update({"successful_login": True}) \
+        .update({"successful_login": "successful"}) \
         .eq("login_attempt_id", login_attempt_id) \
         .execute()
 
