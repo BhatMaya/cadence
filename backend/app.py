@@ -504,7 +504,7 @@ def count_successful_login_attempts(user_id):
     result = supabase.table("login_attempts") \
         .select("login_attempt_id") \
         .eq("user_id", user_id) \
-        .eq("successful_login", True) \
+        .eq("successful_login", "successful") \
         .execute()
     return len(result.data or [])
 
@@ -1146,6 +1146,12 @@ def signup():
 @limiter.limit("10 per minute; 50 per hour")
 def authenticate():
     print("entering authenticate endpoint", flush=True)
+
+    ip = get_remote_address()
+    ip_result = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
+    if ip_result.data and ip_result.data[0]["offense_count"] >= 2:
+        return jsonify({"status": "error", "message": "You are banned from this service."}), 403
+
     data = request.json
     username = data.get("username")
     password = data.get("password")
@@ -1280,7 +1286,7 @@ def authenticate():
     if (score >= threshold):
         enrollment_count += 1
         supabase.table("login_attempts") \
-            .update({"successful_login": True}) \
+            .update({"successful_login": "successful"}) \
             .eq("login_attempt_id", login_attempt_id) \
             .execute()
 
@@ -1508,7 +1514,7 @@ def resend_code():
         "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
-        "html": f"<p>Your one-time code is: {otp}</p>"
+        "html": f"<p>Your one-time code is: {otp}</p><p>Didn't attempt this login? <a href='{request.host_url}report-fraud/{login_attempt_id}'>Report it as fraud.</a></p>"
     })
 
     return jsonify({"status": "code sent"}), 200
@@ -1649,6 +1655,7 @@ def create_login_attempt(supabase, user_id, raw_data, events_hash=None):
         "confidence_score": None,
         "raw_data": raw_data or {},
         "events_hash": events_hash,
+        "ip_address": get_remote_address(),
     }
 
     # 3. insert into login_attempts
@@ -1703,11 +1710,38 @@ def send_code(user_id, login_attempt_id):
         "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
-        "html": f"<p>Your one-time code is: {otp}</p>"
+        "html": f"<p>Your one-time code is: {otp}</p><p>Didn't attempt this login? <a href='{request.host_url}report-fraud/{login_attempt_id}'>Report it as fraud.</a></p>"
     })
     return otp
 
     
+
+@app.get("/report-fraud/<login_attempt_id>")
+def report_fraud(login_attempt_id):
+    supabase.table("login_attempts") \
+        .update({"successful_login": "fraud"}) \
+        .eq("login_attempt_id", login_attempt_id) \
+        .is_("successful_login", "null") \
+        .execute()
+
+    attempt = supabase.table("login_attempts") \
+        .select("ip_address") \
+        .eq("login_attempt_id", login_attempt_id) \
+        .execute()
+
+    if attempt.data and attempt.data[0].get("ip_address"):
+        ip = attempt.data[0]["ip_address"]
+        existing = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
+        if existing.data:
+            supabase.table("blocked_ips") \
+                .update({"offense_count": existing.data[0]["offense_count"] + 1}) \
+                .eq("ip_address", ip) \
+                .execute()
+        else:
+            supabase.table("blocked_ips").insert({"ip_address": ip, "offense_count": 1}).execute()
+
+    return "<p>Thanks for letting us know. The login attempt has been flagged as fraud.</p>", 200
+
 
 if __name__ == "__main__":
     app.run()

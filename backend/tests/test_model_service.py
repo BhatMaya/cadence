@@ -88,13 +88,13 @@ class CadenceModelServiceTest(unittest.TestCase):
                 {
                     "login_attempt_id": "old-success",
                     "username": "alice",
-                    "successful_login": True,
+                    "successful_login": "successful",
                     "raw_data": raw_data,
                 },
                 {
                     "login_attempt_id": "old-failed",
                     "username": "alice",
-                    "successful_login": False,
+                    "successful_login": None,
                     "raw_data": raw_keystrokes(8),
                 },
             ]

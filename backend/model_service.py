@@ -97,7 +97,7 @@ class CadenceModelService:
             supabase.table("login_attempts")
             .select("login_attempt_id, raw_data")
             .eq("user_id", user_id)
-            .eq("successful_login", True)
+            .eq("successful_login", "successful")
             .order("login_number", desc=True)
             .limit(self.enrollment_limit)
         )
