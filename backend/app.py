@@ -1340,6 +1340,11 @@ def logout():
 # this method verifies it against the OTP hash that was generated and stored in _2fa challenges table in supabase. 
 @app.post("/code_verification")
 def code_verification():
+    ip = get_remote_address()
+    ip_result = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
+    if ip_result.data and ip_result.data[0]["offense_count"] >= 2:
+        return jsonify({"status": "error", "message": "You are banned from this service."}), 403
+
     data = request.json
     code = data.get("code")
     login_attempt_id = data.get("login_attempt_id")
@@ -1737,20 +1742,28 @@ def report_fraud(login_attempt_id):
         .execute()
 
     attempt = supabase.table("login_attempts") \
-        .select("ip_address") \
+        .select("ip_address, user_id") \
         .eq("login_attempt_id", login_attempt_id) \
         .execute()
 
-    if attempt.data and attempt.data[0].get("ip_address"):
-        ip = attempt.data[0]["ip_address"]
-        existing = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
-        if existing.data:
-            supabase.table("blocked_ips") \
-                .update({"offense_count": existing.data[0]["offense_count"] + 1}) \
-                .eq("ip_address", ip) \
+    if attempt.data:
+        row = attempt.data[0]
+        user_id = row.get("user_id")
+        if user_id:
+            supabase.table("user_profiles") \
+                .update({"current_login_status": "not logged in"}) \
+                .eq("user_id", user_id) \
                 .execute()
-        else:
-            supabase.table("blocked_ips").insert({"ip_address": ip, "offense_count": 1}).execute()
+        ip = row.get("ip_address")
+        if ip:
+            existing = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
+            if existing.data:
+                supabase.table("blocked_ips") \
+                    .update({"offense_count": existing.data[0]["offense_count"] + 1}) \
+                    .eq("ip_address", ip) \
+                    .execute()
+            else:
+                supabase.table("blocked_ips").insert({"ip_address": ip, "offense_count": 1}).execute()
 
     return "<p>Thanks for letting us know. The login attempt has been flagged as fraud.</p>", 200
 
