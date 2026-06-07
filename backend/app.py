@@ -1565,7 +1565,7 @@ def logout():
         return jsonify({"status": "user not found"}), 200
 
     supabase.table("user_profiles") \
-        .update({"current_login_status": None}) \
+        .update({"current_login_status": "not logged in"}) \
         .eq("username", username) \
         .execute()
 
