@@ -4,7 +4,6 @@ import os
 import random
 import hashlib
 import json
-import base64
 import hmac
 import re
 import resend
@@ -13,9 +12,6 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 import secrets
 import uuid
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives import hashes, serialization
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -125,27 +121,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY").strip()
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-
-# ---------------------------------------------------------------------------
-# RSA keypair for encrypting keystroke events in transit.
-# In production, set CADENCE_RSA_PRIVATE_KEY to a PEM-encoded private key so
-# the same key survives restarts and can be rotated deliberately. In dev/demo
-# mode a fresh ephemeral key is generated at startup.
-# ---------------------------------------------------------------------------
-_raw_pem = os.getenv("CADENCE_RSA_PRIVATE_KEY")
-if _raw_pem:
-    _RSA_PRIVATE_KEY = serialization.load_pem_private_key(
-        _raw_pem.strip().encode(), password=None
-    )
-else:
-    _RSA_PRIVATE_KEY = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048
-    )
-
-_RSA_PUBLIC_KEY_PEM = _RSA_PRIVATE_KEY.public_key().public_bytes(
-    serialization.Encoding.PEM,
-    serialization.PublicFormat.SubjectPublicKeyInfo,
-).decode()
 
 
 def _supabase_sign_up(email, password):
@@ -610,39 +585,6 @@ def model_health():
     return jsonify(model_service.health())
 
 
-@app.get("/public-key")
-def public_key():
-    # Vends the RSA public key so the frontend can encrypt keystroke events
-    # before they leave the browser. The private key never leaves the server,
-    # so a dev-tools observer only ever sees ciphertext - no raw timing values
-    # to copy or tweak by a millisecond.
-    return jsonify({"public_key": _RSA_PUBLIC_KEY_PEM}), 200
-
-
-def _decrypt_events(raw_data):
-    if DEMO_MODE and isinstance(raw_data, dict) and "events" in raw_data:
-        return raw_data
-    if DEMO_MODE and isinstance(raw_data, list):
-        return {"events": raw_data}
-
-    # Expects raw_data = { encrypted_key, iv, ciphertext } (all base64).
-    # 1. Unwrap the per-request AES key with our RSA private key (OAEP-SHA256).
-    # 2. Decrypt the events JSON with AES-256-GCM.
-    # Returns the plaintext { events: [...] } dict, or raises on any failure.
-    enc_key = base64.b64decode(raw_data["encrypted_key"])
-    iv      = base64.b64decode(raw_data["iv"])
-    ct      = base64.b64decode(raw_data["ciphertext"])
-
-    aes_key = _RSA_PRIVATE_KEY.decrypt(
-        enc_key,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
-    plaintext = AESGCM(aes_key).decrypt(iv, ct, None)
-    return json.loads(plaintext)
 
 
 @app.post("/v1/apps")
@@ -1219,11 +1161,6 @@ def authenticate():
 
     if raw_data is None:
         return jsonify({"status": "error", "message": "missing raw_data"}), 400
-
-    try:
-        raw_data = _decrypt_events(raw_data)
-    except Exception:
-        return jsonify({"status": "error", "message": "invalid keystroke payload"}), 400
 
     # Reject suspiciously uniform or impossibly fast keystroke sequences.
     # Matches the same message as the paste check so automated tooling gets
