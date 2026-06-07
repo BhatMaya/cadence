@@ -108,6 +108,7 @@ create table if not exists public.applications (
     slug text not null unique,
     contact_email text,
     app_registration_id uuid,
+    developer_user_id uuid,
     allowed_origins jsonb not null default '[]'::jsonb,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
@@ -117,7 +118,11 @@ create table if not exists public.applications (
 
 alter table if exists public.applications
     add column if not exists contact_email text,
-    add column if not exists app_registration_id uuid;
+    add column if not exists app_registration_id uuid,
+    add column if not exists developer_user_id uuid;
+
+create index if not exists applications_developer_user_idx
+    on public.applications (developer_user_id, created_at desc);
 
 create table if not exists public.api_keys (
     api_key_id uuid primary key default gen_random_uuid(),

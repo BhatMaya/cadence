@@ -131,34 +131,30 @@ GitHub worktree sync are in `docs/deployment.md`.
 ## Platform API quickstart
 
 Cadence can also run as a platform API for other applications. An
-operator creates an application, generates a server-side API key, and
-the integrating app sends typing samples captured by the npm package to
-`/v1/enroll` and `/v1/score`.
+confirmed developer account creates an application, gets a server-side
+API key, and the integrating app sends typing samples captured by the
+npm package to `/v1/enroll` and `/v1/score`.
 
-Developers can submit an app-registration request through `/developer`
-or `submitAppRegistration`. Operators approve the request, which creates
-the application and returns the first `sk_live_...` key once. The
-submission response includes a one-time `reg_status_...` lookup token so
-the developer can check approval status without an admin token.
+Open `/developer`, create a developer account, confirm the Supabase email,
+then sign in and register an application. Cadence creates the application
+and returns the first `sk_live_...` key immediately. Store that key only in
+trusted server-side code.
 
 ```bash
-export CADENCE_ADMIN_TOKEN=<admin-token>
-
-curl -X POST "$CADENCE_API_BASE/v1/apps" \
-  -H "Authorization: Bearer $CADENCE_ADMIN_TOKEN" \
+curl -X POST "$CADENCE_API_BASE/v1/developer/login" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Partner App","allowed_origins":["https://app.example.com"]}'
+  -d '{"email":"dev@example.com","password":"..."}'
 
-curl -X POST "$CADENCE_API_BASE/v1/apps/<application_id>/api-keys" \
-  -H "Authorization: Bearer $CADENCE_ADMIN_TOKEN" \
+curl -X POST "$CADENCE_API_BASE/v1/developer/apps" \
+  -H "Authorization: Bearer <developer-access-token>" \
   -H "Content-Type: application/json" \
-  -d '{"name":"production"}'
+  -d '{"name":"Partner App","allowed_origins":["https://app.example.com"],"key_name":"production"}'
 ```
 
-The Next.js frontend also includes `/developer`, an admin-token-gated
-console for the same app and key lifecycle. Set
-`NEXT_PUBLIC_SYNERGYZE_API_BASE` for the deployed API base, then open
-`/developer` and enter `CADENCE_ADMIN_TOKEN`.
+The admin-token-gated endpoints still exist for operator review, support,
+and manual app/key management. Set `NEXT_PUBLIC_SYNERGYZE_API_BASE` for
+the deployed API base. `CADENCE_ADMIN_TOKEN` is not required for normal
+developer onboarding.
 
 Use the generated `sk_live_...` key only from trusted server-side code.
 Browser code should use `createCapture` to collect a `Sample`, then post

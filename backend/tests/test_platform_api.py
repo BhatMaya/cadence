@@ -122,6 +122,81 @@ class FakeSupabase:
             self.next_id += 1
 
 
+class FakeAuthObject:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class FakeAuth:
+    def __init__(self):
+        self.users_by_token = {
+            "confirmed-token": FakeAuthObject(
+                id="developer-1",
+                email="dev@partner.example",
+                email_confirmed_at="2026-01-01T00:00:00+00:00",
+            ),
+            "other-token": FakeAuthObject(
+                id="developer-2",
+                email="other@partner.example",
+                email_confirmed_at="2026-01-01T00:00:00+00:00",
+            ),
+            "unconfirmed-token": FakeAuthObject(
+                id="developer-3",
+                email="new@partner.example",
+                email_confirmed_at=None,
+            ),
+        }
+
+    def get_user(self, token):
+        user = self.users_by_token.get(token)
+        if not user:
+            raise ValueError("bad token")
+        return FakeAuthObject(user=user)
+
+    def sign_up(self, payload=None, **kwargs):
+        data = payload or kwargs
+        return FakeAuthObject(
+            user=FakeAuthObject(
+                id="developer-4",
+                email=data.get("email"),
+                email_confirmed_at=None,
+            ),
+            session=None,
+        )
+
+    def sign_in_with_password(self, payload):
+        email = payload.get("email")
+        user = next(
+            (
+                candidate
+                for candidate in self.users_by_token.values()
+                if candidate.email == email
+            ),
+            None,
+        )
+        if not user:
+            raise ValueError("invalid credentials")
+        token = next(
+            token
+            for token, candidate in self.users_by_token.items()
+            if candidate is user
+        )
+        return FakeAuthObject(
+            user=user,
+            session=FakeAuthObject(
+                access_token=token,
+                refresh_token="refresh-token",
+                expires_at=1790000000,
+                expires_in=3600,
+            ),
+        )
+
+
+class FakeSupabaseAuthClient:
+    def __init__(self):
+        self.auth = FakeAuth()
+
+
 class FakeModelService:
     enrollment_limit = 10
 
@@ -135,6 +210,7 @@ class FakeModelService:
 class PlatformApiTest(unittest.TestCase):
     def setUp(self):
         self.original_supabase = cadence_app.supabase
+        self.original_supabase_auth = cadence_app.supabase_auth
         self.original_model_service = cadence_app.model_service
         self.original_admin_token = cadence_app.ADMIN_TOKEN
         self.original_allow_open_admin = cadence_app.ALLOW_OPEN_ADMIN
@@ -150,6 +226,7 @@ class PlatformApiTest(unittest.TestCase):
             "revoked_at": None,
         })
         cadence_app.supabase = self.fake_supabase
+        cadence_app.supabase_auth = FakeSupabaseAuthClient()
         cadence_app.model_service = FakeModelService()
         cadence_app.ADMIN_TOKEN = ""
         cadence_app.ALLOW_OPEN_ADMIN = True
@@ -158,6 +235,7 @@ class PlatformApiTest(unittest.TestCase):
 
     def tearDown(self):
         cadence_app.supabase = self.original_supabase
+        cadence_app.supabase_auth = self.original_supabase_auth
         cadence_app.model_service = self.original_model_service
         cadence_app.ADMIN_TOKEN = self.original_admin_token
         cadence_app.ALLOW_OPEN_ADMIN = self.original_allow_open_admin
@@ -165,6 +243,9 @@ class PlatformApiTest(unittest.TestCase):
 
     def auth_headers(self):
         return {"Authorization": f"Bearer {self.api_key}"}
+
+    def developer_headers(self, token="confirmed-token"):
+        return {"Authorization": f"Bearer {token}"}
 
     def test_platform_enroll_and_score_flow(self):
         raw_data = {
@@ -233,6 +314,96 @@ class PlatformApiTest(unittest.TestCase):
         self.assertEqual(stored_key["key_prefix"], key_body["key_prefix"])
         self.assertEqual(stored_key["key_hash"], cadence_app.hash_api_key(key_body["key"]))
         self.assertNotIn("key", stored_key)
+
+    def test_developer_signup_requires_email_confirmation(self):
+        response = self.client.post(
+            "/v1/developer/signup",
+            json={"email": "new@partner.example", "password": "correct horse"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.get_json()
+        self.assertEqual(body["status"], "signed_up")
+        self.assertFalse(body["email_confirmed"])
+        self.assertIsNone(body["session"])
+
+    def test_confirmed_developer_login_create_app_and_key(self):
+        response = self.client.post(
+            "/v1/developer/login",
+            json={"email": "dev@partner.example", "password": "correct horse"},
+        )
+        self.assertEqual(response.status_code, 200)
+        session = response.get_json()["session"]
+        self.assertEqual(session["access_token"], "confirmed-token")
+
+        response = self.client.post(
+            "/v1/developer/apps",
+            json={
+                "name": "Partner App",
+                "slug": "partner-app",
+                "allowed_origins": ["https://partner.example"],
+                "key_name": "production",
+            },
+            headers=self.developer_headers(session["access_token"]),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.get_json()
+        application = body["application"]
+        api_key = body["api_key"]
+        self.assertEqual(application["developer_user_id"], "developer-1")
+        self.assertEqual(application["contact_email"], "dev@partner.example")
+        self.assertEqual(application["allowed_origins"], ["https://partner.example"])
+        self.assertEqual(api_key["name"], "production")
+        self.assertTrue(api_key["key"].startswith("sk_live_"))
+        self.assertEqual(
+            self.fake_supabase.tables["api_keys"][-1]["key_hash"],
+            cadence_app.hash_api_key(api_key["key"]),
+        )
+
+        response = self.client.get(
+            "/v1/developer/apps",
+            headers=self.developer_headers(session["access_token"]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["applications"][0]["application_id"],
+            application["application_id"],
+        )
+
+        response = self.client.get(
+            f"/v1/developer/apps/{application['application_id']}/api-keys",
+            headers=self.developer_headers(session["access_token"]),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["api_keys"][0]["key_prefix"], api_key["key_prefix"])
+        self.assertNotIn("key_hash", response.get_json()["api_keys"][0])
+
+    def test_developer_login_rejects_unconfirmed_email(self):
+        response = self.client.post(
+            "/v1/developer/login",
+            json={"email": "new@partner.example", "password": "correct horse"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["status"], "email_not_confirmed")
+
+    def test_developer_cannot_manage_another_developers_app(self):
+        self.fake_supabase.tables["applications"].append({
+            "application_id": "owned-by-other",
+            "name": "Other App",
+            "slug": "other-app",
+            "allowed_origins": [],
+            "developer_user_id": "developer-2",
+        })
+
+        response = self.client.get(
+            "/v1/developer/apps/owned-by-other/api-keys",
+            headers=self.developer_headers("confirmed-token"),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["status"], "not_found")
 
     def test_admin_endpoints_fail_closed_without_admin_token(self):
         cadence_app.ALLOW_OPEN_ADMIN = False

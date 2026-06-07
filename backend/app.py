@@ -4,6 +4,7 @@ import os
 import random
 import hashlib
 import json
+import base64
 import hmac
 import re
 import resend
@@ -12,6 +13,9 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 import secrets
 import uuid
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives import hashes, serialization
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -65,6 +69,7 @@ RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "team@cadence-capstone.us")
 # (comma-separated) when deploying behind a different origin.
 _DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:3001,http://127.0.0.1:3001,"
     "http://localhost:5173,http://127.0.0.1:5173"
 )
 ALLOWED_ORIGINS = {
@@ -119,6 +124,28 @@ SUPABASE_URL = os.getenv("SUPABASE_URL").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY").strip()
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase_auth = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ---------------------------------------------------------------------------
+# RSA keypair for encrypting keystroke events in transit.
+# In production, set CADENCE_RSA_PRIVATE_KEY to a PEM-encoded private key so
+# the same key survives restarts and can be rotated deliberately. In dev/demo
+# mode a fresh ephemeral key is generated at startup.
+# ---------------------------------------------------------------------------
+_raw_pem = os.getenv("CADENCE_RSA_PRIVATE_KEY")
+if _raw_pem:
+    _RSA_PRIVATE_KEY = serialization.load_pem_private_key(
+        _raw_pem.strip().encode(), password=None
+    )
+else:
+    _RSA_PRIVATE_KEY = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048
+    )
+
+_RSA_PUBLIC_KEY_PEM = _RSA_PRIVATE_KEY.public_key().public_bytes(
+    serialization.Encoding.PEM,
+    serialization.PublicFormat.SubjectPublicKeyInfo,
+).decode()
 
 
 def _supabase_sign_up(email, password):
@@ -198,6 +225,112 @@ def public_app_registration_row(registration_row):
 
 def generate_registration_lookup_token():
     return f"reg_status_{secrets.token_urlsafe(32)}"
+
+
+def object_value(value, key, default=None):
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def auth_user_payload(auth_response):
+    user = object_value(auth_response, "user")
+    if user is None and isinstance(auth_response, dict):
+        user = auth_response.get("data", {}).get("user")
+    if user is None:
+        return None
+
+    confirmed_at = (
+        object_value(user, "email_confirmed_at")
+        or object_value(user, "confirmed_at")
+    )
+    return {
+        "user_id": object_value(user, "id"),
+        "email": object_value(user, "email"),
+        "email_confirmed_at": confirmed_at,
+    }
+
+
+def auth_session_payload(auth_response):
+    session = object_value(auth_response, "session")
+    if session is None and isinstance(auth_response, dict):
+        session = auth_response.get("data", {}).get("session")
+    if session is None:
+        return None
+    return {
+        "access_token": object_value(session, "access_token"),
+        "refresh_token": object_value(session, "refresh_token"),
+        "expires_at": object_value(session, "expires_at"),
+        "expires_in": object_value(session, "expires_in"),
+    }
+
+
+def public_developer_user(auth_response_or_user):
+    user = auth_user_payload(auth_response_or_user)
+    if not user and (
+        isinstance(auth_response_or_user, dict)
+        or hasattr(auth_response_or_user, "id")
+    ):
+        user = {
+            "user_id": object_value(auth_response_or_user, "id"),
+            "email": object_value(auth_response_or_user, "email"),
+            "email_confirmed_at": (
+                object_value(auth_response_or_user, "email_confirmed_at")
+                or object_value(auth_response_or_user, "confirmed_at")
+            ),
+        }
+    return user
+
+
+def sign_up_with_password(email, password):
+    try:
+        return supabase_auth.auth.sign_up({"email": email, "password": password})
+    except TypeError:
+        return supabase_auth.auth.sign_up(email=email, password=password)
+
+
+def developer_sign_in(email, password):
+    return _supabase_sign_in(email, password)
+
+
+def get_user_for_access_token(access_token):
+    return supabase_auth.auth.get_user(access_token)
+
+
+def is_confirmed_developer(user):
+    return bool(user and user.get("user_id") and user.get("email_confirmed_at"))
+
+
+def developer_auth_error():
+    auth = request.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None, error_response("missing developer bearer token", 401, "unauthorized")
+    token = auth.split(" ", 1)[1].strip()
+    if not token:
+        return None, error_response("missing developer bearer token", 401, "unauthorized")
+
+    try:
+        user = public_developer_user(get_user_for_access_token(token))
+    except Exception:
+        app.logger.exception("developer token verification failed")
+        return None, error_response("invalid developer bearer token", 401, "unauthorized")
+    if not user or not user.get("user_id"):
+        return None, error_response("invalid developer bearer token", 401, "unauthorized")
+    if not is_confirmed_developer(user):
+        return None, error_response("developer email is not confirmed", 403, "email_not_confirmed")
+    return user, None
+
+
+def require_developer(handler):
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        developer_user, auth_error = developer_auth_error()
+        if auth_error:
+            return auth_error
+        request.cadence_developer_user = developer_user
+        return handler(*args, **kwargs)
+
+    return wrapped
 
 
 def require_admin_if_configured():
@@ -300,12 +433,58 @@ def create_application_record(data):
     registration_id = data.get("app_registration_id")
     if registration_id:
         payload["app_registration_id"] = registration_id
+    developer_user_id = data.get("developer_user_id")
+    if developer_user_id:
+        payload["developer_user_id"] = developer_user_id
 
     try:
         result = supabase.table("applications").insert(payload).execute()
     except Exception as exc:
         return None, error_response(str(exc), 400)
     return result.data[0], None
+
+
+def create_api_key_record(application_id, name="default"):
+    api_key = generate_api_key()
+    payload = {
+        "application_id": application_id,
+        "name": (name or "default").strip() or "default",
+        "key_prefix": api_key[:API_KEY_PREFIX_LENGTH],
+        "key_hash": hash_api_key(api_key),
+    }
+    result = supabase.table("api_keys").insert(payload).execute()
+    key_row = result.data[0]
+    return key_row, api_key
+
+
+def api_key_with_secret_response(key_row, api_key):
+    return {
+        "api_key_id": key_row["api_key_id"],
+        "application_id": key_row["application_id"],
+        "name": key_row["name"],
+        "key_prefix": key_row["key_prefix"],
+        "key": api_key,
+    }
+
+
+def fetch_developer_application(application_id, developer_user_id):
+    result = supabase.table("applications") \
+        .select("*") \
+        .eq("application_id", application_id) \
+        .eq("developer_user_id", developer_user_id) \
+        .execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def developer_application_or_error(application_id):
+    application = fetch_developer_application(
+        application_id,
+        request.cadence_developer_user["user_id"],
+    )
+    if not application:
+        return None, error_response("application not found", 404, "not_found")
+    return application, None
 
 
 def get_or_create_end_user(application_id, external_user_id, metadata=None):
@@ -535,6 +714,41 @@ def model_health():
     return jsonify(model_service.health())
 
 
+@app.get("/public-key")
+def public_key():
+    # Vends the RSA public key so the frontend can encrypt keystroke events
+    # before they leave the browser. The private key never leaves the server,
+    # so a dev-tools observer only ever sees ciphertext - no raw timing values
+    # to copy or tweak by a millisecond.
+    return jsonify({"public_key": _RSA_PUBLIC_KEY_PEM}), 200
+
+
+def _decrypt_events(raw_data):
+    if DEMO_MODE and isinstance(raw_data, dict) and "events" in raw_data:
+        return raw_data
+    if DEMO_MODE and isinstance(raw_data, list):
+        return {"events": raw_data}
+
+    # Expects raw_data = { encrypted_key, iv, ciphertext } (all base64).
+    # 1. Unwrap the per-request AES key with our RSA private key (OAEP-SHA256).
+    # 2. Decrypt the events JSON with AES-256-GCM.
+    # Returns the plaintext { events: [...] } dict, or raises on any failure.
+    enc_key = base64.b64decode(raw_data["encrypted_key"])
+    iv      = base64.b64decode(raw_data["iv"])
+    ct      = base64.b64decode(raw_data["ciphertext"])
+
+    aes_key = _RSA_PRIVATE_KEY.decrypt(
+        enc_key,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    plaintext = AESGCM(aes_key).decrypt(iv, ct, None)
+    return json.loads(plaintext)
+
+
 @app.post("/v1/apps")
 @limiter.limit(ADMIN_RATE_LIMIT)
 def create_platform_app():
@@ -546,6 +760,189 @@ def create_platform_app():
     if app_error:
         return app_error
     return jsonify({"status": "created", "application": application}), 201
+
+
+@app.post("/v1/developer/signup")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+def developer_signup():
+    data = get_json_body()
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    if not email:
+        return error_response("missing email")
+    if not password:
+        return error_response("missing password")
+
+    try:
+        result = sign_up_with_password(email, password)
+    except Exception as exc:
+        return error_response(str(exc), 400)
+
+    user = auth_user_payload(result)
+    session = auth_session_payload(result)
+    return jsonify({
+        "status": "signed_up",
+        "developer": user,
+        "session": session,
+        "email_confirmed": bool(user and user.get("email_confirmed_at")),
+        "message": "Check your email to confirm your developer account.",
+    }), 201
+
+
+@app.post("/v1/developer/login")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+def developer_login():
+    data = get_json_body()
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    if not email:
+        return error_response("missing email")
+    if not password:
+        return error_response("missing password")
+
+    try:
+        result = developer_sign_in(email, password)
+    except Exception as exc:
+        return error_response(str(exc), 401, "unauthorized")
+
+    user = auth_user_payload(result)
+    if not is_confirmed_developer(user):
+        return error_response("developer email is not confirmed", 403, "email_not_confirmed")
+
+    session = auth_session_payload(result)
+    if not session or not session.get("access_token"):
+        return error_response("developer session was not returned", 401, "unauthorized")
+
+    return jsonify({
+        "status": "ok",
+        "developer": user,
+        "session": session,
+    })
+
+
+@app.get("/v1/developer/me")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+@require_developer
+def developer_me():
+    return jsonify({
+        "status": "ok",
+        "developer": request.cadence_developer_user,
+    })
+
+
+@app.get("/v1/developer/apps")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_developer
+def list_developer_apps():
+    result = supabase.table("applications") \
+        .select("*") \
+        .eq("developer_user_id", request.cadence_developer_user["user_id"]) \
+        .order("created_at", desc=True) \
+        .execute()
+    return jsonify({"status": "ok", "applications": result.data or []})
+
+
+@app.post("/v1/developer/apps")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+@require_developer
+def create_developer_app():
+    data = get_json_body()
+    developer_user = request.cadence_developer_user
+    application, app_error = create_application_record({
+        **data,
+        "contact_email": developer_user.get("email"),
+        "developer_user_id": developer_user["user_id"],
+    })
+    if app_error:
+        return app_error
+
+    key_row, api_key = create_api_key_record(
+        application["application_id"],
+        data.get("key_name") or "production",
+    )
+    return jsonify({
+        "status": "created",
+        "application": application,
+        "api_key": api_key_with_secret_response(key_row, api_key),
+    }), 201
+
+
+@app.get("/v1/developer/apps/<application_id>/usage")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_developer
+def get_developer_app_usage(application_id):
+    application, app_error = developer_application_or_error(application_id)
+    if app_error:
+        return app_error
+
+    usage = build_platform_app_usage(application["application_id"])
+    return jsonify({"status": "ok", "usage": usage})
+
+
+@app.get("/v1/developer/apps/<application_id>/api-keys")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_developer
+def list_developer_api_keys(application_id):
+    application, app_error = developer_application_or_error(application_id)
+    if app_error:
+        return app_error
+
+    result = supabase.table("api_keys") \
+        .select("api_key_id, application_id, name, key_prefix, revoked_at, last_used_at, created_at") \
+        .eq("application_id", application["application_id"]) \
+        .order("created_at", desc=True) \
+        .execute()
+    return jsonify({"status": "ok", "api_keys": result.data or []})
+
+
+@app.post("/v1/developer/apps/<application_id>/api-keys")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+@require_developer
+def create_developer_api_key(application_id):
+    application, app_error = developer_application_or_error(application_id)
+    if app_error:
+        return app_error
+
+    data = get_json_body()
+    key_row, api_key = create_api_key_record(
+        application["application_id"],
+        data.get("name") or "default",
+    )
+    return jsonify({
+        "status": "created",
+        "api_key": api_key_with_secret_response(key_row, api_key),
+    }), 201
+
+
+@app.post("/v1/developer/api-keys/<api_key_id>/revoke")
+@limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
+@require_developer
+def revoke_developer_api_key(api_key_id):
+    result = supabase.table("api_keys") \
+        .select("api_key_id, application_id, name, key_prefix, revoked_at, last_used_at, created_at") \
+        .eq("api_key_id", api_key_id) \
+        .execute()
+    rows = result.data or []
+    if not rows:
+        return error_response("API key not found", 404, "not_found")
+
+    key_row = rows[0]
+    application = fetch_developer_application(
+        key_row["application_id"],
+        request.cadence_developer_user["user_id"],
+    )
+    if not application:
+        return error_response("API key not found", 404, "not_found")
+
+    if key_row.get("revoked_at") is None:
+        revoked_at = datetime.now(timezone.utc).isoformat()
+        update_result = supabase.table("api_keys") \
+            .update({"revoked_at": revoked_at}) \
+            .eq("api_key_id", api_key_id) \
+            .execute()
+        key_row = (update_result.data or [key_row])[0]
+
+    return jsonify({"status": "revoked", "api_key": public_api_key_row(key_row)})
 
 
 @app.post("/v1/app-registrations")
@@ -667,15 +1064,10 @@ def approve_platform_app_registration(app_registration_id):
         return app_error
 
     data = get_json_body()
-    api_key = generate_api_key()
-    key_payload = {
-        "application_id": application["application_id"],
-        "name": (data.get("key_name") or "default").strip() or "default",
-        "key_prefix": api_key[:API_KEY_PREFIX_LENGTH],
-        "key_hash": hash_api_key(api_key),
-    }
-    key_result = supabase.table("api_keys").insert(key_payload).execute()
-    key_row = key_result.data[0]
+    key_row, api_key = create_api_key_record(
+        application["application_id"],
+        data.get("key_name") or "default",
+    )
 
     update_result = supabase.table("app_registrations") \
         .update({
@@ -691,13 +1083,7 @@ def approve_platform_app_registration(app_registration_id):
         "status": "approved",
         "registration": public_app_registration_row(updated_registration),
         "application": application,
-        "api_key": {
-            "api_key_id": key_row["api_key_id"],
-            "application_id": key_row["application_id"],
-            "name": key_row["name"],
-            "key_prefix": key_row["key_prefix"],
-            "key": api_key,
-        },
+        "api_key": api_key_with_secret_response(key_row, api_key),
     }), 201
 
 
@@ -773,24 +1159,10 @@ def create_platform_api_key(application_id):
         return error_response("application not found", 404, "not_found")
 
     data = get_json_body()
-    api_key = generate_api_key()
-    payload = {
-        "application_id": application_id,
-        "name": (data.get("name") or "default").strip() or "default",
-        "key_prefix": api_key[:API_KEY_PREFIX_LENGTH],
-        "key_hash": hash_api_key(api_key),
-    }
-    result = supabase.table("api_keys").insert(payload).execute()
-    key_row = result.data[0]
+    key_row, api_key = create_api_key_record(application_id, data.get("name") or "default")
     return jsonify({
         "status": "created",
-        "api_key": {
-            "api_key_id": key_row["api_key_id"],
-            "application_id": key_row["application_id"],
-            "name": key_row["name"],
-            "key_prefix": key_row["key_prefix"],
-            "key": api_key,
-        },
+        "api_key": api_key_with_secret_response(key_row, api_key),
     }), 201
 
 
@@ -1151,6 +1523,11 @@ def authenticate():
 
     if raw_data is None:
         return jsonify({"status": "error", "message": "missing raw_data"}), 400
+
+    try:
+        raw_data = _decrypt_events(raw_data)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid keystroke payload"}), 400
 
     # Reject suspiciously uniform or impossibly fast keystroke sequences.
     # Matches the same message as the paste check so automated tooling gets
