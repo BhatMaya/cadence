@@ -1959,6 +1959,18 @@ def send_code(user_id, login_attempt_id):
     
 
 @app.get("/report-fraud/<login_attempt_id>")
+def report_fraud_confirm(login_attempt_id):
+    return f"""
+    <html><body>
+      <p>Did you receive a verification code you didn't request?</p>
+      <form method="POST" action="/report-fraud/{login_attempt_id}">
+        <button type="submit">Yes, report this as fraud</button>
+      </form>
+    </body></html>
+    """, 200
+
+
+@app.post("/report-fraud/<login_attempt_id>")
 def report_fraud(login_attempt_id):
     supabase.table("login_attempts") \
         .update({"successful_login": "fraud"}) \
