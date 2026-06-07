@@ -1477,13 +1477,6 @@ def resend_code():
     if not result.data:
         return jsonify({"status": "invalid attempt"}), 200
 
-    # delete any expired 2fa rows for this user before issuing a new code
-    supabase.table("_2fa") \
-        .delete() \
-        .eq("user_id", user_id) \
-        .lt("expires_at", datetime.now(timezone.utc).isoformat()) \
-        .execute()
-
     # generate new OTP
     otp = str(random.randint(100000, 999999))
     otp_hash = hashlib.sha256(otp.encode()).hexdigest()
@@ -1691,18 +1684,10 @@ def send_code(user_id, login_attempt_id):
     otp_hash = hashlib.sha256(otp.encode()).hexdigest()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
 
-    # delete any expired 2fa rows for this user before inserting a fresh one
-    supabase.table("_2fa") \
-        .delete() \
-        .eq("user_id", user_id) \
-        .lt("expires_at", datetime.now(timezone.utc).isoformat()) \
-        .execute()
-
     # insert the 2fa attempt
     supabase.table("_2fa") \
         .insert({
             "login_attempt_id": login_attempt_id,
-            "user_id": user_id,
             "otp_hash": otp_hash,
             "expires_at": expires_at.isoformat(),
             "attempt_count": 0
