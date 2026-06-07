@@ -109,13 +109,24 @@ def load_feature_file(path):
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
 
+    if isinstance(raw_data, dict):
+        if "samples" in raw_data:
+            raw_data = raw_data["samples"]
+        elif "features" in raw_data:
+            raw_data = raw_data["features"]
+        else:
+            raw_data = list(raw_data.values())
+
     samples = []
     metas = []
     for item in raw_data:
-        keystrokes = item.get("keystrokes", [])
         meta = item.get("meta", {})
         user_id = meta.get("user_id")
-        if not keystrokes or not user_id:
+        if not user_id:
+            continue
+
+        keystrokes = item.get("keystrokes", [])
+        if not keystrokes:
             continue
 
         samples.append(np.asarray([keystroke_to_vector(k) for k in keystrokes]))
@@ -464,13 +475,13 @@ def threshold_metrics(labels, scores):
     labels = np.asarray(labels, dtype="int32")
     scores = np.asarray(scores, dtype="float64")
     unique_scores = np.unique(scores)
-    score_range = float(np.max(unique_scores) - np.min(unique_scores))
+    score_range = float(np.max(unique_scores) - np.min(unique_scores)) if len(unique_scores) > 0 else 0.0
     epsilon = max(1e-7, score_range * 1e-6)
     thresholds = np.concatenate(
         (
-            [unique_scores[-1] + epsilon],
+            [unique_scores[-1] + epsilon] if len(unique_scores) > 0 else [0.5],
             unique_scores[::-1],
-            [unique_scores[0] - epsilon],
+            [unique_scores[0] - epsilon] if len(unique_scores) > 0 else [0.5],
         )
     )
 
@@ -645,7 +656,7 @@ def main():
     )
 
     model = build_cadence_model(input_shape=(padded_samples.shape[1], 3))
-    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="binary_crossentropy", metrics=["accuracy"])
 
     callbacks = []
     if not args.no_early_stopping:
