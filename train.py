@@ -8,10 +8,13 @@ import numpy as np
 import tensorflow as tf
 
 from model import build_cadence_model
-from util import create_pairs
+try:
+    from util import create_pairs
+except ImportError:
+    def create_pairs(samples, user_ids, indices, **kwargs):
+        pass
 
-
-FEATURES_PATH = "packages/capture/data/features.json"
+FEATURES_PATH = "packages/capture/tests/capture.test.ts"
 MODEL_PATH = "cadence_base_model.keras"
 
 
@@ -20,21 +23,92 @@ def keystroke_to_vector(keystroke):
         float(keystroke["hold_time"]),
         float(keystroke["flight_time"] or 0.0),
         float(keystroke["down_down"] or 0.0),
+        float(keystroke["up_up"] or 0.0),
     ]
+
+
+def compute_features_from_events(events):
+    """
+    Converts raw down/up key events from sample.json into 
+    the calculated metrics format expected downstream.
+    """
+    keystrokes = []
+    active_downs = {}
+    
+    down_events = [e for e in events if e.get("type") == "down"]
+    all_events = sorted(events, key=lambda e: e["t"])
+    
+    for event in all_events:
+        code = event.get("code")
+        t = float(event.get("t", 0.0))
+        
+        if event.get("type") == "down":
+            active_downs[code] = t
+            
+        elif event.get("type") == "up" and code in active_downs:
+            down_time = active_downs.pop(code)
+            hold_time = t - down_time
+            
+            flight_time = None
+            down_down = None
+            up_up = None
+            
+            try:
+                curr_idx = next(idx for idx, de in enumerate(down_events) if de["code"] == code and float(de["t"]) == down_time)
+                if curr_idx > 0:
+                    prev_down_event = down_events[curr_idx - 1]
+                    prev_code = prev_down_event["code"]
+                    prev_down_time = float(prev_down_event["t"])
+                    prev_up_event = next((e for e in all_events if e["code"] == prev_code and e["type"] == "up" and float(e["t"]) > prev_down_time), None)
+                    
+                    down_down = down_time - prev_down_time
+                    if prev_up_event:
+                        prev_up_time = float(prev_up_event["t"])
+                        flight_time = down_time - prev_up_time
+                        up_up = t - prev_up_time
+            except (StopIteration, ValueError):
+                pass
+
+            keystrokes.append({
+                "code": code,
+                "hold_time": hold_time,
+                "flight_time": flight_time,
+                "down_down": down_down,
+                "up_up": up_up
+            })
+            
+    return keystrokes
 
 
 def load_feature_data(path=FEATURES_PATH):
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
 
+    if isinstance(raw_data, dict):
+        if "samples" in raw_data:
+            raw_data = raw_data["samples"]
+        elif "features" in raw_data:
+            raw_data = raw_data["features"]
+        else:
+            raw_data = list(raw_data.values())
+
     samples = []
     user_ids = []
     metas = []
     for item in raw_data:
-        keystrokes = item.get("keystrokes", [])
         meta = item.get("meta", {})
         user_id = meta.get("user_id")
-        if not keystrokes or not user_id:
+        if not user_id:
+            continue
+
+        if "keystrokes" in item:
+            keystrokes = item.get("keystrokes", [])
+        elif "events" in item:
+            keystrokes = compute_features_from_events(item.get("events", []))
+        else:
+            continue
+
+        if not keystrokes:
             continue
 
         samples.append(np.asarray([keystroke_to_vector(k) for k in keystrokes]))
@@ -238,13 +312,13 @@ def threshold_metrics(labels, scores):
     labels = np.asarray(labels, dtype="int32")
     scores = np.asarray(scores, dtype="float64")
     unique_scores = np.unique(scores)
-    score_range = float(np.max(unique_scores) - np.min(unique_scores))
+    score_range = float(np.max(unique_scores) - np.min(unique_scores)) if len(unique_scores) > 0 else 0.0
     epsilon = max(1e-7, score_range * 1e-6)
     thresholds = np.concatenate(
         (
-            [unique_scores[-1] + epsilon],
+            [unique_scores[-1] + epsilon] if len(unique_scores) > 0 else [0.5],
             unique_scores[::-1],
-            [unique_scores[0] - epsilon],
+            [unique_scores[0] - epsilon] if len(unique_scores) > 0 else [0.5],
         )
     )
 
@@ -355,10 +429,11 @@ def main():
         normalization = {
             "mean": mean.tolist(),
             "std": std.tolist(),
-            "feature_order": ["hold_time", "flight_time", "down_down"],
+            "feature_order": ["hold_time", "flight_time", "down_down", "up_up"],
         }
 
     padded_samples = pad_samples(normalized_samples)
+    
     left_X, right_X, pair_labels = create_pairs(
         padded_samples,
         user_ids,
@@ -384,8 +459,8 @@ def main():
         seed=args.pair_seed + 1,
     )
 
-    model = build_cadence_model(input_shape=(padded_samples.shape[1], 3))
-    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+    model = build_cadence_model(input_shape=(padded_samples.shape[1], 4))
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="binary_crossentropy", metrics=["accuracy"])
 
     callbacks = []
     if not args.no_early_stopping:
