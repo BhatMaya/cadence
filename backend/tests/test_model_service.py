@@ -120,7 +120,7 @@ class CadenceModelServiceTest(unittest.TestCase):
 
         score = service.score_login_attempt(
             supabase,
-            "alice",
+            "user-alice",
             raw_data,
             login_attempt_id="current",
         )
@@ -205,7 +205,7 @@ class CadenceModelServiceTest(unittest.TestCase):
         service = CadenceModelService()
         score = service.score_login_attempt(
             FakeSupabase([]),
-            "alice",
+            "user-alice",
             raw_keystrokes(8),
             login_attempt_id="current",
         )
