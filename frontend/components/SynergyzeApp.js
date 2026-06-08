@@ -15,13 +15,7 @@ function readRouteFromLocation() {
 }
 
 function getApiBase() {
-  if (typeof window === 'undefined') return 'http://localhost:5001';
-  return (
-    window.SYNERGYZE_API_BASE ||
-    process.env.NEXT_PUBLIC_SYNERGYZE_API_BASE ||
-    window.localStorage.getItem('synergyze.api_base') ||
-    'http://localhost:5001'
-  );
+  return '/api/synergyze';
 }
 
 // Detect mobile/touch devices so the backend can skip biometric scoring

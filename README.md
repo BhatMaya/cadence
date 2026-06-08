@@ -152,9 +152,9 @@ curl -X POST "$CADENCE_API_BASE/v1/developer/apps" \
 ```
 
 The admin-token-gated endpoints still exist for operator review, support,
-and manual app/key management. Set `NEXT_PUBLIC_SYNERGYZE_API_BASE` for
-the deployed API base. `CADENCE_ADMIN_TOKEN` is not required for normal
-developer onboarding.
+and manual app/key management. Set `SYNERGYZE_API_BASE` for the deployed
+API base and `CADENCE_API_KEY` for the Synergyze app's server-side API
+key. `CADENCE_ADMIN_TOKEN` is not required for normal developer onboarding.
 
 Use the generated `sk_live_...` key only from trusted server-side code.
 Browser code should use `createCapture` to collect a `Sample`, then post
@@ -206,10 +206,9 @@ checklist.
   features, and exposes a typed Cadence API client. The frontend imports
   the prebuilt dist from `frontend/vendor/`.
 - **`frontend/`** — Next.js app with client-side routes
-  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Posts to
-  `http://localhost:5001` by default; override with
-  `NEXT_PUBLIC_SYNERGYZE_API_BASE` or
-  `localStorage.setItem('synergyze.api_base', '...')` in the browser
-  console.
+  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Browser requests
+  go through `/api/synergyze/*`; that server-side proxy posts to
+  `SYNERGYZE_API_BASE` or `http://localhost:5001` by default and adds
+  `CADENCE_API_KEY` as a bearer token when configured.
 - **`model.py` / `train.py`** — the model architecture and training
   loop. Pretrained weights live in `models/`.
