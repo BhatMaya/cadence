@@ -1282,11 +1282,9 @@ def authenticate():
         return jsonify({"status": "error", "message": "please type your password manually"}), 400
 
     # query user_profiles table to check user exists and get email for Supabase auth
-    application_id = request.cadence_application["application_id"]
     user = supabase.table("user_profiles") \
         .select("*") \
         .eq("username", username) \
-        .eq("application_id", application_id) \
         .execute()
 
     # if user not found
@@ -1388,7 +1386,7 @@ def authenticate():
         .eq("login_attempt_id", login_attempt_id) \
         .execute()
     
-    threshold = float(request.cadence_application.get("threshold") or DEFAULT_THRESHOLD)
+    threshold = DEFAULT_THRESHOLD
     app.logger.info("threshold: %s", threshold)
 
     # check it
