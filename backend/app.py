@@ -585,8 +585,6 @@ def model_health():
     return jsonify(model_service.health())
 
 
-
-
 @app.post("/v1/apps")
 @limiter.limit(ADMIN_RATE_LIMIT)
 def create_platform_app():
@@ -600,6 +598,9 @@ def create_platform_app():
     return jsonify({"status": "created", "application": application}), 201
 
 
+# developer registration endpoint
+# request takes in email, password
+# response gives status, developer, session, confirmation, and message. sends confirmation email.
 @app.post("/v1/developer/signup")
 @limiter.limit(PUBLIC_REGISTRATION_RATE_LIMIT)
 def developer_signup():
@@ -1042,9 +1043,74 @@ def set_application_threshold(application_id):
     return jsonify({"status": "ok", "application_id": application_id, "threshold": threshold})
 
 
+_VALID_LOGIN_STATUSES = {"logged in", "not logged in"}
+
+
+def _get_user_profile_for_app(user_id, application_id):
+    """Return the user_profiles row if it belongs to the given application, else None."""
+    result = supabase.table("user_profiles") \
+        .select("user_id, current_login_status, application_id") \
+        .eq("user_id", user_id) \
+        .execute()
+    row = (result.data or [None])[0]
+    if not row:
+        return None, "user not found"
+    if row.get("application_id") != application_id:
+        return None, "forbidden"
+    return row, None
+
+
+@app.get("/v1/apps/<application_id>/users/<user_id>/status")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_api_key
+def get_user_status(application_id, user_id):
+    if request.cadence_application["application_id"] != application_id:
+        return error_response("forbidden", 403, "forbidden")
+
+    row, err = _get_user_profile_for_app(user_id, application_id)
+    if err == "forbidden":
+        return error_response("forbidden", 403, "forbidden")
+    if err:
+        return error_response("user not found", 404, "not found")
+
+    return jsonify({"status": "ok", "user_id": user_id, "current_login_status": row["current_login_status"]})
+
+
+@app.patch("/v1/apps/<application_id>/users/<user_id>/status")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_api_key
+def set_user_status(application_id, user_id):
+    if request.cadence_application["application_id"] != application_id:
+        return error_response("forbidden", 403, "forbidden")
+
+    row, err = _get_user_profile_for_app(user_id, application_id)
+    if err == "forbidden":
+        return error_response("forbidden", 403, "forbidden")
+    if err:
+        return error_response("user not found", 404, "not found")
+
+    data = get_json_body()
+    new_status = data.get("current_login_status")
+    if not new_status:
+        return error_response("missing current_login_status")
+    if new_status not in _VALID_LOGIN_STATUSES:
+        return error_response(
+            f"invalid status; must be one of: {', '.join(sorted(_VALID_LOGIN_STATUSES))}"
+        )
+
+    supabase.table("user_profiles") \
+        .update({"current_login_status": new_status}) \
+        .eq("user_id", user_id) \
+        .execute()
+
+    return jsonify({"status": "ok", "user_id": user_id, "current_login_status": new_status})
+
+
 # user signup endpoint
 # register a new account through Supabase and add a local profile
 @app.post("/signup")
+@limiter.limit("5 per minute; 20 per hour")
+@require_api_key
 def signup():
     data = request.json
     email = data.get("email")
@@ -1124,6 +1190,7 @@ def signup():
             "number_login_attempts": 0,
             "failed_password_attempts": 0,
             "number_of_successful_logins": 0,
+            "application_id": request.cadence_application["application_id"],
         }).execute()
     except Exception as exc:
         app.logger.exception("signup profile insert failed for user_id=%s", user_id)
