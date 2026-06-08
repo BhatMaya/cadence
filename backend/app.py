@@ -1211,6 +1211,7 @@ def signup():
 # then applies biometric scoring and optional 2FA if the score is too low.
 @app.post("/authenticate")
 @limiter.limit("10 per minute; 50 per hour")
+@require_api_key
 def authenticate():
     print("entering authenticate endpoint", flush=True)
 
@@ -1379,6 +1380,7 @@ def authenticate():
 
 
 @app.post("/logout")
+@require_api_key
 def logout():
     print("entering logout endpoint", flush=True)
     data = request.json or {}
@@ -1406,6 +1408,7 @@ def logout():
 # main endpoint 2: after code is sent to user's email, client gets one-time code from user. 
 # this method verifies it against the OTP hash that was generated and stored in _2fa challenges table in supabase. 
 @app.post("/code_verification")
+@require_api_key
 def code_verification():
     ip = get_remote_address()
     ip_result = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
@@ -1527,6 +1530,7 @@ def code_verification():
 
 # resend 2fa code endpoint
 @app.post("/resend_code")
+@require_api_key
 def resend_code():
     data = request.json
     login_attempt_id = data.get("login_attempt_id")
@@ -1786,7 +1790,6 @@ def send_code(user_id, login_attempt_id):
     })
     return otp
 
-    
 
 @app.get("/report-fraud/<login_attempt_id>")
 def report_fraud_confirm(login_attempt_id):
