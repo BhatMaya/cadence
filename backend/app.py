@@ -551,7 +551,7 @@ def require_2fa(user_id, login_attempt_id, enrollment_count, reason):
     except Exception as exc:
         app.logger.exception("send_code failed; rolling back pending 2fa")
         supabase.table("user_profiles") \
-            .update({"current_login_status": None}) \
+            .update({"current_login_status": "not logged in"}) \
             .eq("user_id", user_id) \
             .execute()
         supabase.table("_2fa") \
@@ -1430,7 +1430,7 @@ def code_verification():
 
     if is_unlock:
         supabase.table("user_profiles") \
-            .update({"current_login_status": None, "failed_password_attempts": 0}) \
+            .update({"current_login_status": "not logged in", "failed_password_attempts": 0}) \
             .eq("user_id", user_id) \
             .execute()
         return jsonify({"status": "unlocked"}), 200
@@ -1442,7 +1442,7 @@ def code_verification():
         .execute()
 
     enrollment_count = count_successful_login_attempts(user_id)
-    user_status = "logged in" if enrollment_count >= REQUIRED_ENROLLMENT_SAMPLES else None
+    user_status = "logged in" if enrollment_count >= REQUIRED_ENROLLMENT_SAMPLES else "not logged in"
 
     # Enrollment attempts stay login-capable until enough samples are collected.
     # Also clear any stale failure counter on successful authentication.
