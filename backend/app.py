@@ -1347,7 +1347,7 @@ def authenticate():
         .eq("login_attempt_id", login_attempt_id) \
         .execute()
     
-    threshold = DEFAULT_THRESHOLD
+    threshold = request.cadence_application.get("threshold") or DEFAULT_THRESHOLD
     app.logger.info("threshold: %s", threshold)
 
     # check it
