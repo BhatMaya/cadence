@@ -10,6 +10,7 @@ import type {
 
 export interface CadenceAuthClientOptions {
   apiBaseUrl: string;
+  apiKey?: string;
   fetchImpl?: typeof fetch;
   detectMobile?: () => boolean;
 }
@@ -88,11 +89,13 @@ export interface LogoutResponse {
 
 export class CadenceAuthClient {
   private readonly apiBaseUrl: string;
+  private readonly apiKey?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly detectMobile?: () => boolean;
 
   constructor(options: CadenceAuthClientOptions) {
     this.apiBaseUrl = normalizeApiBaseUrl(options.apiBaseUrl);
+    this.apiKey = options.apiKey;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.detectMobile = options.detectMobile;
   }
@@ -133,9 +136,12 @@ export class CadenceAuthClient {
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+
     const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body)
     });
     const responseBody = await parseResponseBody(response);

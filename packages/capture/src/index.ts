@@ -16,7 +16,6 @@ export type {
   AppRegistrationResponse,
   AppRegistrationStatusOptions,
   AppRegistrationStatusResponse,
-  EnrollmentState,
   SubmitAppRegistrationOptions
 } from './api.js';
 export type {

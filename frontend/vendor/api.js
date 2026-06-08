@@ -6,43 +6,12 @@ export class CadenceApiError extends Error {
         this.body = body;
     }
 }
-export class CadenceClient {
-    constructor(options) {
-        if (!options.apiBaseUrl) {
-            throw new TypeError('CadenceClient: apiBaseUrl is required');
-        }
-        if (!options.apiKey) {
-            throw new TypeError('CadenceClient: apiKey is required');
-        }
-        this.apiBaseUrl = options.apiBaseUrl.replace(/\/+$/, '');
-        this.apiKey = options.apiKey;
-        this.fetchImpl = options.fetchImpl ?? fetch;
-    }
-    async request(path, init = {}) {
-        const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
-            method: init.method ?? 'GET',
-            headers: {
-                Authorization: `Bearer ${this.apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: init.body === undefined ? undefined : JSON.stringify(init.body)
-        });
-        const body = await parseResponseBody(response);
-        if (!response.ok) {
-            throw new CadenceApiError(errorMessage(body, response.status), response.status, body);
-        }
-        return body;
-    }
-}
-export function createCadenceClient(options) {
-    return new CadenceClient(options);
-}
 export async function submitAppRegistration(options, request) {
     if (!options.apiBaseUrl) {
         throw new TypeError('submitAppRegistration: apiBaseUrl is required');
     }
     const fetchImpl = options.fetchImpl ?? fetch;
-    const response = await fetchImpl(`${options.apiBaseUrl.replace(/\/+$/, '')}/v1/app-registrations`, {
+    const response = await fetchImpl(`${normalizeApiBaseUrl(options.apiBaseUrl)}/v1/app-registrations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request)
@@ -57,23 +26,31 @@ export async function getAppRegistrationStatus(options, appRegistrationId) {
     if (!options.apiBaseUrl) {
         throw new TypeError('getAppRegistrationStatus: apiBaseUrl is required');
     }
+    if (!options.lookupToken) {
+        throw new TypeError('getAppRegistrationStatus: lookupToken is required');
+    }
     if (!appRegistrationId) {
         throw new TypeError('getAppRegistrationStatus: appRegistrationId is required');
     }
     const fetchImpl = options.fetchImpl ?? fetch;
-    const headers = { 'Content-Type': 'application/json' };
-    if (options.lookupToken) {
-        headers.Authorization = `Bearer ${options.lookupToken}`;
-    }
-    const response = await fetchImpl(`${options.apiBaseUrl.replace(/\/+$/, '')}/v1/app-registrations/${encodeURIComponent(appRegistrationId)}/status`, {
+    const response = await fetchImpl(`${normalizeApiBaseUrl(options.apiBaseUrl)}/v1/app-registrations/${encodeURIComponent(appRegistrationId)}/status`, {
         method: 'GET',
-        headers
+        headers: {
+            Authorization: `Bearer ${options.lookupToken}`,
+            'Content-Type': 'application/json'
+        }
     });
     const body = await parseResponseBody(response);
     if (!response.ok) {
         throw new CadenceApiError(errorMessage(body, response.status), response.status, body);
     }
     return body;
+}
+export function normalizeApiBaseUrl(apiBaseUrl) {
+    if (!apiBaseUrl) {
+        throw new TypeError('apiBaseUrl is required');
+    }
+    return apiBaseUrl.replace(/\/+$/, '');
 }
 async function parseResponseBody(response) {
     const text = await response.text();

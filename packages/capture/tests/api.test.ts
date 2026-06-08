@@ -117,6 +117,7 @@ describe('CadenceAuthClient', () => {
     );
     const client = createCadenceAuthClient({
       apiBaseUrl: 'https://api.example.test/',
+      apiKey: 'sk_live_test',
       fetchImpl
     });
 
@@ -131,7 +132,10 @@ describe('CadenceAuthClient', () => {
       'https://api.example.test/signup',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: 'Bearer sk_live_test',
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
           email: 'dev@example.test',
           username: 'alice',

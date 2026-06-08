@@ -74,8 +74,10 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>, register, sign in, and copy the OTP from
-the green "Demo mode" banner on the 2FA page.
+Open <http://localhost:3000>, register, and sign in. The Synergyze demo owns
+the browser UI, then sends requests through its Next.js proxy route to the
+backend's app-scoped `/signup`, `/authenticate`, `/code_verification`,
+`/resend_code`, and `/logout` endpoints.
 
 ### Useful commands
 
@@ -128,61 +130,41 @@ Do not set
 Deployment details for the Render backend, Vercel frontend, and sibling
 GitHub worktree sync are in `docs/deployment.md`.
 
-## Platform API quickstart
+## App-scoped API quickstart
 
-Cadence can also run as a platform API for other applications. An
-confirmed developer account creates an application, gets a server-side
-API key, and the integrating app sends typing samples captured by the
-npm package to `/v1/enroll` and `/v1/score`.
-
-Open `/developer`, create a developer account, confirm the Supabase email,
-then sign in and register an application. Cadence creates the application
-and returns the first `sk_live_...` key immediately. Store that key only in
-trusted server-side code.
-
-```bash
-curl -X POST "$CADENCE_API_BASE/v1/developer/login" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"dev@example.com","password":"..."}'
-
-curl -X POST "$CADENCE_API_BASE/v1/developer/apps" \
-  -H "Authorization: Bearer <developer-access-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Partner App","allowed_origins":["https://app.example.com"],"key_name":"production"}'
-```
-
-The admin-token-gated endpoints still exist for operator review, support,
-and manual app/key management. Set `SYNERGYZE_API_BASE` for the deployed
-API base and `CADENCE_API_KEY` for the Synergyze app's server-side API
-key. `CADENCE_ADMIN_TOKEN` is not required for normal developer onboarding.
+Cadence app integrations use a server-side API key to scope requests to an
+application. Set `SYNERGYZE_API_BASE` for the deployed API base and
+`CADENCE_API_KEY` for the Synergyze app's server-side API key. The browser
+posts to `/api/synergyze/*`; that Next.js route attaches the API key and
+forwards to the backend.
 
 Use the generated `sk_live_...` key only from trusted server-side code.
-Browser code should use `createCapture` to collect a `Sample`, then post
-that sample to the application's own backend; that backend calls
-Cadence.
+Browser code should use `createCapture` or `createPasswordAuthController`
+to collect a `Sample`, then post that sample to the application's own
+backend or proxy.
 
 ```ts
-import { createCadenceClient } from '@cadence-auth/cadence';
+import { createCadenceAuthClient } from '@cadence-auth/cadence';
 
-const cadence = createCadenceClient({
+const cadence = createCadenceAuthClient({
   apiBaseUrl: process.env.CADENCE_API_BASE!,
   apiKey: process.env.CADENCE_API_KEY!
 });
 
-await cadence.enroll({
-  external_user_id: user.id,
-  raw_data: sample,
-  quality_score: sample.quality_score,
-  flags: sample.flags
+await cadence.signup({
+  email: 'user@example.com',
+  username: 'alice',
+  password: 'correct horse battery staple'
 });
 
-const result = await cadence.score({
-  external_user_id: user.id,
+const result = await cadence.authenticate({
+  username: 'alice',
+  password: 'correct horse battery staple',
   raw_data: sample
 });
 
-if (result.match) {
-  console.log('Typing matched with confidence', result.confidence);
+if (result.status === 'accepted') {
+  console.log('Logged in');
 }
 ```
 
@@ -203,12 +185,12 @@ checklist.
   twin towers, and returns the mean similarity.
 - **`packages/capture/`** — TypeScript/ESM package that captures
   `keydown`/`keyup` timings into a `Sample` payload, extracts timing
-  features, and exposes a typed Cadence API client. The frontend imports
+  features, and exposes typed Cadence auth helpers. The frontend imports
   the prebuilt dist from `frontend/vendor/`.
 - **`frontend/`** — Next.js app with client-side routes
-  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Browser requests
-  go through `/api/synergyze/*`; that server-side proxy posts to
-  `SYNERGYZE_API_BASE` or `http://localhost:5001` by default and adds
-  `CADENCE_API_KEY` as a bearer token when configured.
+  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Synergyze browser
+  requests go through `/api/synergyze/*`; that server-side route forwards
+  to `SYNERGYZE_API_BASE` and attaches `CADENCE_API_KEY` for app-scoped
+  backend routes.
 - **`model.py` / `train.py`** — the model architecture and training
   loop. Pretrained weights live in `models/`.

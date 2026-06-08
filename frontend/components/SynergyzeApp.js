@@ -261,16 +261,17 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
       attachCapture(loginPasswordRef.current);
       return;
     }
-    const events = sample ? sample.events : [];
-    // Encrypt keystroke events when WebCrypto is available. Plain HTTP on a
-    // LAN/Tailscale IP is not a secure browser context, so local demo mode
-    // falls back to raw events; the backend accepts that only in demo mode.
-    const raw_data = { events };
+    const raw_data = { events: sample.events };
     const is_mobile = isMobileDevice();
 
     setStatus('login', 'Analyzing your typing rhythm...');
     try {
-      const { json } = await api('/authenticate', { username, password, raw_data, is_mobile });
+      const { json } = await api('/authenticate', {
+        username,
+        password,
+        raw_data,
+        is_mobile
+      });
 
       switch (json.status) {
         case 'accepted':

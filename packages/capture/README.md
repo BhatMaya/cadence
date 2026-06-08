@@ -15,7 +15,7 @@ npm install @cadence-auth/cadence
 import { createPasswordAuthController } from '@cadence-auth/cadence';
 
 const auth = createPasswordAuthController({
-  apiBaseUrl: 'https://api.cadence.example',
+  apiBaseUrl: '/api/cadence',
   usernameInput: document.querySelector<HTMLInputElement>('#username')!,
   passwordInput: document.querySelector<HTMLInputElement>('#password')!,
   minLength: 8
@@ -46,13 +46,14 @@ on submit, sends `/authenticate`, clears poisoned samples, restarts capture for
 retryable failures, and exposes helpers for `/code_verification`,
 `/resend_code`, and `/logout`.
 
-## Auth client only
+## App-scoped auth client
 
 ```ts
 import { createCadenceAuthClient } from '@cadence-auth/cadence';
 
 const cadence = createCadenceAuthClient({
-  apiBaseUrl: 'https://api.cadence.example'
+  apiBaseUrl: process.env.CADENCE_API_BASE!,
+  apiKey: process.env.CADENCE_API_KEY!
 });
 
 await cadence.signup({
@@ -75,6 +76,9 @@ if (login.status === '2fa required') {
 }
 ```
 
+Use `apiKey` only from trusted server-side code, or call your own backend
+proxy from the browser so `CADENCE_API_KEY` is never exposed.
+
 ## Low-level capture
 
 Use this when you want full control over the form flow.
@@ -83,7 +87,7 @@ Use this when you want full control over the form flow.
 import { createCadenceAuthClient, createCapture } from '@cadence-auth/cadence';
 
 const cadence = createCadenceAuthClient({
-  apiBaseUrl: 'https://api.cadence.example'
+  apiBaseUrl: '/api/cadence'
 });
 const input = document.querySelector<HTMLInputElement>('#password')!;
 const capture = createCapture({

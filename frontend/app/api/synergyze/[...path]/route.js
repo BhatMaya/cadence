@@ -20,9 +20,7 @@ async function proxy(request, { params }) {
   if (contentType) headers.set('content-type', contentType);
 
   const apiKey = process.env.CADENCE_API_KEY;
-  if (apiKey) {
-    headers.set('authorization', `Bearer ${apiKey}`);
-  }
+  if (apiKey) headers.set('authorization', `Bearer ${apiKey}`);
 
   const method = request.method.toUpperCase();
   const hasBody = !['GET', 'HEAD'].includes(method);
@@ -35,9 +33,7 @@ async function proxy(request, { params }) {
 
   const responseHeaders = new Headers();
   const upstreamContentType = upstream.headers.get('content-type');
-  if (upstreamContentType) {
-    responseHeaders.set('content-type', upstreamContentType);
-  }
+  if (upstreamContentType) responseHeaders.set('content-type', upstreamContentType);
 
   return new Response(await upstream.text(), {
     status: upstream.status,
@@ -51,5 +47,9 @@ export async function GET(request, context) {
 }
 
 export async function POST(request, context) {
+  return proxy(request, context);
+}
+
+export async function PATCH(request, context) {
   return proxy(request, context);
 }

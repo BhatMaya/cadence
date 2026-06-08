@@ -42,13 +42,6 @@ export interface AppRegistrationStatusResponse {
   readonly registration: AppRegistration;
 }
 
-export interface EnrollmentState {
-  readonly enrolled: boolean;
-  readonly enrollment_count: number;
-  readonly enrollment_required: number;
-  readonly enrollment_samples_needed: number;
-}
-
 export class CadenceApiError extends Error {
   readonly status: number;
   readonly body: unknown;
