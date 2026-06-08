@@ -44,7 +44,7 @@ await fetch("${base}/authenticate", {
   const thresholdExample = `curl -X PATCH ${base}/v1/apps/${app.application_id}/threshold \\
   -H "Authorization: Bearer $CADENCE_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{ "threshold": 0.4 }'`;
+  -d '{ "threshold": 0.68 }'`;
 
   return (
     <div>

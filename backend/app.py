@@ -731,11 +731,11 @@ def set_developer_app_threshold(application_id):
     try:
         threshold = float(threshold)
     except (TypeError, ValueError):
-        return error_response("threshold must be one of 0.4, 0.5, or 0.65")
+        return error_response("threshold must be one of 0.55, 0.68, or 0.72")
 
-    allowed_thresholds = {0.4, 0.5, 0.65}
+    allowed_thresholds = {0.55, 0.68, 0.72}
     if threshold not in allowed_thresholds:
-        return error_response("threshold must be one of 0.4, 0.5, or 0.65")
+        return error_response("threshold must be one of 0.55, 0.68, or 0.72")
 
     result = supabase.table("applications") \
         .update({

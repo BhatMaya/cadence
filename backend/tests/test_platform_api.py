@@ -376,22 +376,22 @@ class PlatformApiTest(unittest.TestCase):
             "allowed_origins": [],
             "contact_email": "dev@partner.example",
             "approved": True,
-            "threshold": 0.5,
+            "threshold": 0.68,
         })
 
         response = self.client.patch(
             "/v1/developer/apps/developer-app/threshold",
-            json={"threshold": 0.65},
+            json={"threshold": 0.72},
             headers=self.developer_headers("confirmed-token"),
         )
 
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["threshold"], 0.65)
-        self.assertEqual(body["application"]["threshold"], 0.65)
+        self.assertEqual(body["threshold"], 0.72)
+        self.assertEqual(body["application"]["threshold"], 0.72)
         self.assertEqual(
             self.fake_supabase.tables["applications"][-1]["threshold"],
-            0.65,
+            0.72,
         )
 
         response = self.client.patch(
@@ -401,7 +401,7 @@ class PlatformApiTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("0.4, 0.5, or 0.65", response.get_json()["message"])
+        self.assertIn("0.55, 0.68, or 0.72", response.get_json()["message"])
 
     def test_admin_endpoints_fail_closed_without_admin_token(self):
         cadence_app.ALLOW_OPEN_ADMIN = False

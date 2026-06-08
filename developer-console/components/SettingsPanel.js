@@ -7,19 +7,19 @@ const THRESHOLD_OPTIONS = [
   {
     id: "lenient",
     label: "Lenient",
-    threshold: 0.4,
+    threshold: 0.55,
     description: "Accepts more real users when typing varies."
   },
   {
     id: "medium",
     label: "Medium",
-    threshold: 0.5,
+    threshold: 0.68,
     description: "Balanced default for most apps."
   },
   {
     id: "strict",
     label: "High strictness",
-    threshold: 0.65,
+    threshold: 0.72,
     description: "Requires a closer keystroke match."
   }
 ];
