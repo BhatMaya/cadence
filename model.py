@@ -37,7 +37,7 @@ def build_cadence_model(input_shape=(None, 4)):
     x = Masking(mask_value=0.0)(inputs)
     x = transformer_encoder_block(x, head_size=64, num_heads=4, ff_dim=128, dropout=0.1)
     x = LSTM(64, return_sequences=False, dropout=0.1)(x)
-    x = Dense(96, activation='gelu')(x)
+    x = Dense(128, activation='gelu')(x)
     embedding = Dropout(0.05)(x)
 
     encoder = Model(inputs, embedding, name="HighCapacity_Encoder")
