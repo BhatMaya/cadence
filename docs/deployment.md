@@ -43,9 +43,10 @@ Configure the Vercel project with Root Directory `frontend`; the
 monorepos, while `vercel.json` lives in the selected project root and can
 override framework and build commands.
 
-Required Vercel environment variable:
+Required Vercel environment variables:
 
-- `NEXT_PUBLIC_SYNERGYZE_API_BASE=<deployed Render API base URL>`
+- `SYNERGYZE_API_BASE=<deployed Render API base URL>`
+- `CADENCE_API_KEY=<Synergyze application sk_live_... API key>`
 
 The developer portal must be reachable by external integrators. Disable
 Vercel Deployment Protection for the production deployment, or configure a

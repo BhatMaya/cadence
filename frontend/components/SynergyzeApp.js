@@ -15,13 +15,7 @@ function readRouteFromLocation() {
 }
 
 function getApiBase() {
-  if (typeof window === 'undefined') return 'http://localhost:5001';
-  return (
-    window.SYNERGYZE_API_BASE ||
-    process.env.NEXT_PUBLIC_SYNERGYZE_API_BASE ||
-    window.localStorage.getItem('synergyze.api_base') ||
-    'http://localhost:5001'
-  );
+  return '/api/synergyze';
 }
 
 // Detect mobile/touch devices so the backend can skip biometric scoring
@@ -267,16 +261,17 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
       attachCapture(loginPasswordRef.current);
       return;
     }
-    const events = sample ? sample.events : [];
-    // Encrypt keystroke events when WebCrypto is available. Plain HTTP on a
-    // LAN/Tailscale IP is not a secure browser context, so local demo mode
-    // falls back to raw events; the backend accepts that only in demo mode.
-    const raw_data = { events };
+    const raw_data = { events: sample.events };
     const is_mobile = isMobileDevice();
 
     setStatus('login', 'Analyzing your typing rhythm...');
     try {
-      const { json } = await api('/authenticate', { username, password, raw_data, is_mobile });
+      const { json } = await api('/authenticate', {
+        username,
+        password,
+        raw_data,
+        is_mobile
+      });
 
       switch (json.status) {
         case 'accepted':

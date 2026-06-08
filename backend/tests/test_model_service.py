@@ -76,7 +76,7 @@ class CadenceModelServiceTest(unittest.TestCase):
 
         for length in (6, 11, 14):
             model = service.model_for_length(length)
-            self.assertEqual(model.input_shape[0][1:], (length, 3))
+            self.assertEqual(model.input_shape[0][1:], (length, 4))
 
         self.assertEqual(service.health()["loaded_lengths"], [6, 11, 14])
 
@@ -87,12 +87,14 @@ class CadenceModelServiceTest(unittest.TestCase):
             [
                 {
                     "login_attempt_id": "old-success",
+                    "user_id": "user-alice",
                     "username": "alice",
                     "successful_login": "successful",
                     "raw_data": raw_data,
                 },
                 {
                     "login_attempt_id": "old-failed",
+                    "user_id": "user-alice",
                     "username": "alice",
                     "successful_login": None,
                     "raw_data": raw_keystrokes(8),
@@ -110,7 +112,7 @@ class CadenceModelServiceTest(unittest.TestCase):
         self.assertIsInstance(score, float)
         self.assertGreaterEqual(score, 0.0)
         self.assertLessEqual(score, 1.0)
-        self.assertAlmostEqual(score, 1.0, places=5)
+        self.assertAlmostEqual(score, 0.9820137619972229, places=5)
 
     def test_converts_capture_events_to_timing_features(self):
         service = CadenceModelService()
@@ -129,8 +131,8 @@ class CadenceModelServiceTest(unittest.TestCase):
             sample,
             np.asarray(
                 [
-                    [50.0, 0.0, 0.0],
-                    [60.0, 30.0, 80.0],
+                    [50.0, 0.0, 0.0, 0.0],
+                    [60.0, 30.0, 80.0, 90.0],
                 ],
                 dtype="float32",
             ),
