@@ -132,11 +132,35 @@ GitHub worktree sync are in `docs/deployment.md`.
 
 ## App-scoped API quickstart
 
-Cadence app integrations use a server-side API key to scope requests to an
-application. Set `SYNERGYZE_API_BASE` for the deployed API base and
-`CADENCE_API_KEY` for the Synergyze app's server-side API key. The browser
-posts to `/api/synergyze/*`; that Next.js route attaches the API key and
-forwards to the backend.
+Cadence can also run as a platform API for other applications. An
+confirmed developer account creates an application, gets a server-side
+API key, and the integrating app sends typing samples captured by the
+npm package to `/v1/enroll` and `/v1/score`.
+
+Open `/developer`, create a developer account, confirm the Supabase email,
+then sign in and register an application. Cadence creates the application
+and returns the first `sk_live_...` key immediately. Store that key only in
+trusted server-side code.
+
+```bash
+curl -X POST "$CADENCE_API_BASE/v1/developer/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"dev@example.com","password":"..."}'
+
+curl -X POST "$CADENCE_API_BASE/v1/developer/apps" \
+  -H "Authorization: Bearer <developer-access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Partner App","allowed_origins":["https://app.example.com"],"key_name":"production"}'
+```
+
+The admin-token-gated endpoints still exist for operator review, support,
+and manual app/key management. `CADENCE_ADMIN_TOKEN` is not required for
+normal developer onboarding.
+
+For the Synergyze demo frontend, set `SYNERGYZE_API_BASE` for the deployed
+API base and `CADENCE_API_KEY` for the Synergyze app's server-side API key.
+The browser posts to `/api/synergyze/*`; that Next.js route attaches the
+API key and forwards to the backend.
 
 Use the generated `sk_live_...` key only from trusted server-side code.
 Browser code should use `createCapture` or `createPasswordAuthController`
