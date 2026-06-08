@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_PATH = REPO_ROOT / "models" / "cadence_base_model.keras"
 DEFAULT_METRICS_PATH = REPO_ROOT / "models" / "cadence_base_model.metrics.json"
 DEFAULT_ENROLLMENT_LIMIT = 10
+DEFAULT_CHUNK_LENGTH = 11
 
 
 class CadenceModelService:
@@ -28,6 +29,7 @@ class CadenceModelService:
         model_path=None,
         metrics_path=None,
         enrollment_limit=None,
+        chunk_length=None,
     ):
         self.model_path = Path(
             model_path or os.getenv("CADENCE_MODEL_PATH", DEFAULT_MODEL_PATH)
@@ -39,6 +41,10 @@ class CadenceModelService:
         self.enrollment_limit = int(
             enrollment_limit
             or os.getenv("CADENCE_ENROLLMENT_LIMIT", DEFAULT_ENROLLMENT_LIMIT)
+        )
+        self.chunk_length = int(
+            chunk_length
+            or os.getenv("CADENCE_MODEL_CHUNK_LENGTH", DEFAULT_CHUNK_LENGTH)
         )
         self._models = {}
         self._mean = None
@@ -74,6 +80,34 @@ class CadenceModelService:
             return None
 
     def score_against_enrollment(self, current_sample, enrollment_samples):
+        current_sample = np.asarray(current_sample, dtype="float32")
+        matching_enrollment = [
+            np.asarray(sample, dtype="float32")
+            for sample in enrollment_samples
+            if len(sample) == len(current_sample)
+        ]
+        if not matching_enrollment:
+            raise ValueError("no enrollment samples match current sample length")
+
+        if len(current_sample) > self.chunk_length:
+            return self.score_chunked(current_sample, matching_enrollment)
+
+        return self.score_sample_pairs(current_sample, matching_enrollment)
+
+    def score_chunked(self, current_sample, enrollment_samples):
+        scores = []
+        for start, end in self.chunk_ranges(len(current_sample)):
+            current_chunk = self.sample_chunk(current_sample, start, end)
+            enrollment_chunks = [
+                self.sample_chunk(sample, start, end) for sample in enrollment_samples
+            ]
+            scores.append(self.score_sample_pairs(current_chunk, enrollment_chunks))
+
+        if not scores:
+            raise ValueError("sample did not produce any scoring chunks")
+        return float(np.mean(scores))
+
+    def score_sample_pairs(self, current_sample, enrollment_samples):
         target_length = int(len(current_sample))
         model = self.model_for_length(target_length)
         current = self.prepare_sample(current_sample, target_length)
@@ -91,6 +125,30 @@ class CadenceModelService:
         )
         scores = result.numpy().reshape(-1)
         return float(np.mean(scores))
+
+    def chunk_ranges(self, sample_length):
+        if sample_length <= 0:
+            return []
+        if sample_length <= self.chunk_length:
+            return [(0, sample_length)]
+
+        stride = max(1, self.chunk_length // 2)
+        last_start = sample_length - self.chunk_length
+        starts = list(range(0, last_start + 1, stride))
+        if starts[-1] != last_start:
+            starts.append(last_start)
+        return [(start, start + self.chunk_length) for start in starts]
+
+    def sample_chunk(self, sample, start, end):
+        chunk = np.asarray(sample[start:end], dtype="float32").copy()
+        if len(chunk) == 0:
+            raise ValueError("chunk cannot be empty")
+
+        feature_order = self.feature_order()
+        for feature_name in ("flight_time", "down_down", "up_up"):
+            if feature_name in feature_order:
+                chunk[0, feature_order.index(feature_name)] = 0.0
+        return chunk
 
     def fetch_enrollment_samples(self, supabase, username, login_attempt_id=None):
         query = (

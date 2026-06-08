@@ -525,6 +525,64 @@ def build_platform_app_usage(application_id):
     }
 
 
+def get_or_create_end_user(application_id, external_user_id, threshold=None, metadata=None):
+    query = supabase.table("end_users") \
+        .select("*") \
+        .eq("application_id", application_id) \
+        .eq("external_user_id", external_user_id) \
+        .execute()
+    rows = query.data or []
+    if rows:
+        return rows[0]
+
+    payload = {
+        "application_id": application_id,
+        "external_user_id": external_user_id,
+        "metadata": metadata or {},
+    }
+    if threshold is not None:
+        payload["threshold"] = float(threshold)
+
+    created = supabase.table("end_users").insert(payload).execute()
+    return (created.data or [None])[0]
+
+
+def count_platform_enrollment(end_user_id):
+    result = supabase.table("typing_samples") \
+        .select("typing_sample_id") \
+        .eq("end_user_id", end_user_id) \
+        .eq("successful", True) \
+        .execute()
+    return len(result.data or [])
+
+
+def platform_enrollment_payload(end_user_id):
+    enrollment_count = count_platform_enrollment(end_user_id)
+    samples_needed = max(REQUIRED_ENROLLMENT_SAMPLES - enrollment_count, 0)
+    return {
+        "enrolled": samples_needed == 0,
+        "enrollment_count": enrollment_count,
+        "enrollment_required": REQUIRED_ENROLLMENT_SAMPLES,
+        "enrollment_samples_needed": samples_needed,
+    }
+
+
+def fetch_platform_enrollment_samples(end_user_id):
+    result = supabase.table("typing_samples") \
+        .select("raw_data") \
+        .eq("end_user_id", end_user_id) \
+        .eq("successful", True) \
+        .order("created_at", desc=True) \
+        .limit(model_service.enrollment_limit) \
+        .execute()
+    samples = []
+    for row in result.data or []:
+        raw_data = row.get("raw_data")
+        if raw_data:
+            samples.append(model_service.raw_data_to_sample(raw_data))
+    return samples
+
+
 def count_successful_login_attempts(user_id):
     result = supabase.table("login_attempts") \
         .select("login_attempt_id") \
@@ -1085,6 +1143,190 @@ def set_application_threshold(application_id):
         .execute()
 
     return jsonify({"status": "ok", "application_id": application_id, "threshold": threshold})
+
+
+@app.post("/v1/end-users")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_api_key
+def create_platform_end_user():
+    data = get_json_body()
+    external_user_id = (data.get("external_user_id") or "").strip()
+    if not external_user_id:
+        return error_response("missing external_user_id")
+
+    metadata = data.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return error_response("metadata must be an object")
+
+    end_user = get_or_create_end_user(
+        request.cadence_application["application_id"],
+        external_user_id,
+        threshold=data.get("threshold"),
+        metadata=metadata,
+    )
+    return jsonify({
+        "status": "ok",
+        "end_user": end_user,
+        **platform_enrollment_payload(end_user["end_user_id"]),
+    })
+
+
+@app.get("/v1/end-users/<external_user_id>")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_api_key
+def get_platform_end_user(external_user_id):
+    result = supabase.table("end_users") \
+        .select("*") \
+        .eq("application_id", request.cadence_application["application_id"]) \
+        .eq("external_user_id", external_user_id) \
+        .execute()
+    rows = result.data or []
+    if not rows:
+        return error_response("end user not found", 404, "not_found")
+
+    end_user = rows[0]
+    return jsonify({
+        "status": "ok",
+        "end_user": end_user,
+        **platform_enrollment_payload(end_user["end_user_id"]),
+    })
+
+
+@app.post("/v1/enroll")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_api_key
+def platform_enroll():
+    data = get_json_body()
+    external_user_id = (data.get("external_user_id") or "").strip()
+    raw_data = data.get("raw_data")
+    if not external_user_id:
+        return error_response("missing external_user_id")
+    if raw_data is None:
+        return error_response("missing raw_data")
+
+    try:
+        model_service.raw_data_to_sample(raw_data)
+    except Exception as exc:
+        return error_response(f"invalid raw_data: {exc}")
+
+    app_id = request.cadence_application["application_id"]
+    end_user = get_or_create_end_user(app_id, external_user_id)
+    flags = data.get("flags") or []
+    if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+        return error_response("flags must be a list of strings")
+
+    payload = {
+        "application_id": app_id,
+        "end_user_id": end_user["end_user_id"],
+        "raw_data": raw_data,
+        "source": data.get("source") or "enrollment",
+        "successful": bool(data.get("successful", True)),
+        "quality_score": data.get("quality_score"),
+        "flags": flags,
+    }
+    supabase.table("typing_samples").insert(payload).execute()
+    return jsonify({
+        "status": "enrolled",
+        "end_user_id": end_user["end_user_id"],
+        "external_user_id": external_user_id,
+        **platform_enrollment_payload(end_user["end_user_id"]),
+    }), 201
+
+
+@app.post("/v1/score")
+@limiter.limit(PLATFORM_SCORE_RATE_LIMIT)
+@require_api_key
+def platform_score():
+    data = get_json_body()
+    external_user_id = (data.get("external_user_id") or "").strip()
+    raw_data = data.get("raw_data")
+    if not external_user_id:
+        return error_response("missing external_user_id")
+    if raw_data is None:
+        return error_response("missing raw_data")
+
+    app_id = request.cadence_application["application_id"]
+    end_user = get_or_create_end_user(app_id, external_user_id)
+    enrollment = platform_enrollment_payload(end_user["end_user_id"])
+    threshold = float(data.get("threshold") or end_user.get("threshold") or 0.5)
+
+    score_started = time.perf_counter()
+    score = None
+    accepted = False
+    reason = None
+    if not enrollment["enrolled"]:
+        try:
+            model_service.raw_data_to_sample(raw_data)
+        except Exception as exc:
+            return error_response(f"invalid raw_data: {exc}")
+
+        flags = data.get("flags") or []
+        if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+            return error_response("flags must be a list of strings")
+
+        supabase.table("typing_samples").insert({
+            "application_id": app_id,
+            "end_user_id": end_user["end_user_id"],
+            "raw_data": raw_data,
+            "source": data.get("source") or "enrollment",
+            "successful": True,
+            "quality_score": data.get("quality_score"),
+            "flags": flags,
+        }).execute()
+        enrollment = platform_enrollment_payload(end_user["end_user_id"])
+        reason = "enrollment"
+    else:
+        try:
+            current_sample = model_service.raw_data_to_sample(raw_data)
+            enrollment_samples = fetch_platform_enrollment_samples(end_user["end_user_id"])
+            score = model_service.score_against_enrollment(current_sample, enrollment_samples)
+            accepted = score >= threshold
+            reason = "accepted" if accepted else "low_confidence"
+        except Exception as exc:
+            app.logger.exception("platform model scoring failed")
+            reason = f"scoring_failed: {exc}"
+    score_duration_ms = round((time.perf_counter() - score_started) * 1000, 3)
+
+    request_payload = {
+        "application_id": app_id,
+        "end_user_id": end_user["end_user_id"],
+        "external_user_id": external_user_id,
+        "raw_data": raw_data,
+        "score": score,
+        "threshold": threshold,
+        "accepted": accepted,
+        "enrolled": enrollment["enrolled"],
+        "enrollment_count": enrollment["enrollment_count"],
+        "enrollment_required": enrollment["enrollment_required"],
+        "reason": reason,
+        "score_duration_ms": score_duration_ms,
+    }
+    score_result = supabase.table("score_requests").insert(request_payload).execute()
+
+    if accepted and data.get("store_successful_sample", False):
+        supabase.table("typing_samples").insert({
+            "application_id": app_id,
+            "end_user_id": end_user["end_user_id"],
+            "raw_data": raw_data,
+            "source": "score",
+            "successful": True,
+            "confidence_score": score,
+        }).execute()
+
+    return jsonify({
+        "status": "ok",
+        "score_request_id": score_result.data[0]["score_request_id"],
+        "end_user_id": end_user["end_user_id"],
+        "external_user_id": external_user_id,
+        "score": score,
+        "confidence": score,
+        "accepted": accepted,
+        "match": accepted,
+        "threshold": threshold,
+        "reason": reason,
+        "score_duration_ms": score_duration_ms,
+        **enrollment,
+    })
 
 
 # user signup endpoint

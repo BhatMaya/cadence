@@ -7,8 +7,8 @@ from tensorflow.keras.layers import (
     LayerNormalization,
     LSTM,
     MultiHeadAttention,
+    Masking
 )
-
 
 @tf.keras.utils.register_keras_serializable(package="Cadence")
 class ExponentialManhattanSimilarity(tf.keras.layers.Layer):
@@ -21,9 +21,9 @@ class ExponentialManhattanSimilarity(tf.keras.layers.Layer):
         return (input_shape[0][0], 1)
 
 
-def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.1):
+def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.01):
     attention_output = MultiHeadAttention(
-        num_heads=num_heads, key_dim=head_size
+        num_heads=num_heads, key_dim=head_size, dropout=dropout
     )(inputs, inputs)
     x = Add()([inputs, attention_output])
     x = LayerNormalization(epsilon=1e-6)(x)
@@ -36,10 +36,14 @@ def transformer_encoder_block(inputs, head_size, num_heads, ff_dim, dropout=0.1)
     return x
 
 
-def build_cadence_model(input_shape=(None, 3)):
+def build_cadence_model(input_shape=(None, 4)):
+    """
+    Builds the Siamese architecture for Keystroke Dynamics.
+    Default input shape expects variable length sequences (None) with 4 features.
+    """
     inputs = Input(shape=input_shape)
 
-    x = tf.keras.layers.Masking(mask_value=0.0)(inputs)
+    x = Masking(mask_value=0.0)(inputs)
 
     x = transformer_encoder_block(x, head_size=64, num_heads=4, ff_dim=128)
 
@@ -54,10 +58,9 @@ def build_cadence_model(input_shape=(None, 3)):
 
     encoded_a = encoder(input_a)
     encoded_b = encoder(input_b)
-
     distance = ExponentialManhattanSimilarity(
         name="exponential_manhattan_similarity"
     )([encoded_a, encoded_b])
 
-    siamese_net = Model(inputs=[input_a, input_b], outputs=distance)
+    siamese_net = Model(inputs=[input_a, input_b], outputs=distance, name="Cadence_Siamese_Net")
     return siamese_net
