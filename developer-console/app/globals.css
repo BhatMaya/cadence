@@ -524,19 +524,12 @@ textarea {
   opacity: 0.72;
 }
 .threshold-label,
-.threshold-value,
 .threshold-desc {
   display: block;
 }
 .threshold-label {
   font-weight: 600;
   font-size: 14px;
-}
-.threshold-value {
-  margin-top: 6px;
-  color: var(--accent-hover);
-  font-family: var(--mono);
-  font-size: 13px;
 }
 .threshold-desc {
   margin-top: 10px;

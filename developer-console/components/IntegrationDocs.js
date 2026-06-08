@@ -41,11 +41,6 @@ await fetch("${base}/authenticate", {
   })
 });`;
 
-  const thresholdExample = `curl -X PATCH ${base}/v1/apps/${app.application_id}/threshold \\
-  -H "Authorization: Bearer $CADENCE_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "threshold": 0.68 }'`;
-
   return (
     <div>
       <div className="section-title">
@@ -69,18 +64,6 @@ await fetch("${base}/authenticate", {
           flows for users instead of creating separate external end users.
         </p>
         <CodeBlock>{authExample}</CodeBlock>
-      </div>
-
-      <div className="card">
-        <div className="row between">
-          <h3 style={{ fontSize: 14 }}>Tune app threshold</h3>
-          <code className="mono faint">PATCH /v1/apps/{app.application_id}/threshold</code>
-        </div>
-        <p className="muted text-sm">
-          API keys are currently used for server-side app management. This
-          endpoint updates the biometric acceptance threshold for this app.
-        </p>
-        <CodeBlock>{thresholdExample}</CodeBlock>
       </div>
 
       <div className="alert alert-info" style={{ marginBottom: 0 }}>

@@ -67,8 +67,6 @@ export default function SettingsPanel({ app, onAuthError, onAppUpdated }) {
     }
   }
 
-  const activeOption = THRESHOLD_OPTIONS.find((option) => option.id === selected);
-
   return (
     <div>
       <div className="section-title">
@@ -83,7 +81,7 @@ export default function SettingsPanel({ app, onAuthError, onAppUpdated }) {
           <div>
             <h3>Keystroke checking</h3>
             <p className="setting-copy">
-              Current threshold: <code>{activeOption?.threshold.toFixed(2)}</code>
+              Current setting: {THRESHOLD_OPTIONS.find((option) => option.id === selected)?.label}
             </p>
           </div>
           {saving && <span className="badge neutral">Saving</span>}
@@ -109,7 +107,6 @@ export default function SettingsPanel({ app, onAuthError, onAppUpdated }) {
               aria-checked={selected === option.id}
             >
               <span className="threshold-label">{option.label}</span>
-              <span className="threshold-value">{option.threshold.toFixed(2)}</span>
               <span className="threshold-desc">{option.description}</span>
             </button>
           ))}
