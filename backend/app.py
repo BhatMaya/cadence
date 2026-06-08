@@ -1362,7 +1362,7 @@ def signup():
             "user_id": user_id,
             "username": username,
             "email": email,
-            "current_login_status": None,
+            "current_login_status": "logged in",
             "number_login_attempts": 0,
             "failed_password_attempts": 0,
             "number_of_successful_logins": 0,
