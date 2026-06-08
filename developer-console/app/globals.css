@@ -476,6 +476,74 @@ textarea {
   margin-top: 0;
 }
 
+/* ---- Settings ----------------------------------------------------------- */
+
+.setting-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.setting-header h3 {
+  font-size: 15px;
+}
+.setting-copy {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.threshold-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.threshold-option {
+  min-height: 128px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.threshold-option:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elev-2);
+}
+.threshold-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px rgba(109, 139, 255, 0.2);
+}
+.threshold-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+.threshold-label,
+.threshold-value,
+.threshold-desc {
+  display: block;
+}
+.threshold-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.threshold-value {
+  margin-top: 6px;
+  color: var(--accent-hover);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.threshold-desc {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 /* ---- Tables ------------------------------------------------------------- */
 
 .table {
@@ -817,5 +885,8 @@ textarea {
   }
   .topbar-right .email {
     display: none;
+  }
+  .threshold-options {
+    grid-template-columns: 1fr;
   }
 }

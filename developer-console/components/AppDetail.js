@@ -5,14 +5,16 @@ import CopyButton from "./CopyButton";
 import UsagePanel from "./UsagePanel";
 import ApiKeysPanel from "./ApiKeysPanel";
 import IntegrationDocs from "./IntegrationDocs";
+import SettingsPanel from "./SettingsPanel";
 
 const TABS = [
   { id: "usage", label: "Usage" },
   { id: "keys", label: "API Keys" },
+  { id: "settings", label: "Settings" },
   { id: "integrate", label: "Integrate" },
 ];
 
-export default function AppDetail({ app, onAuthError, onRevealKey }) {
+export default function AppDetail({ app, onAuthError, onRevealKey, onAppUpdated }) {
   const [tab, setTab] = useState("usage");
 
   return (
@@ -66,6 +68,14 @@ export default function AppDetail({ app, onAuthError, onRevealKey }) {
           appId={app.application_id}
           onAuthError={onAuthError}
           onRevealKey={onRevealKey}
+        />
+      )}
+      {tab === "settings" && (
+        <SettingsPanel
+          key={app.application_id}
+          app={app}
+          onAuthError={onAuthError}
+          onAppUpdated={onAppUpdated}
         />
       )}
       {tab === "integrate" && <IntegrationDocs app={app} />}
