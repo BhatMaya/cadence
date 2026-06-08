@@ -1,15 +1,10 @@
-export interface CadenceClientOptions {
-    apiBaseUrl: string;
-    apiKey: string;
-    fetchImpl?: typeof fetch;
-}
 export interface SubmitAppRegistrationOptions {
     apiBaseUrl: string;
     fetchImpl?: typeof fetch;
 }
 export interface AppRegistrationStatusOptions {
     apiBaseUrl: string;
-    lookupToken?: string;
+    lookupToken: string;
     fetchImpl?: typeof fetch;
 }
 export interface AppRegistrationRequest {
@@ -27,7 +22,6 @@ export interface AppRegistration {
     readonly allowed_origins: readonly string[];
     readonly use_case?: string | null;
     readonly status: 'pending' | 'approved' | 'rejected';
-    readonly approved?: boolean;
     readonly application_id?: string | null;
     readonly reviewed_at?: string | null;
     readonly created_at?: string;
@@ -47,13 +41,6 @@ export declare class CadenceApiError extends Error {
     readonly body: unknown;
     constructor(message: string, status: number, body: unknown);
 }
-export declare class CadenceClient {
-    private readonly apiBaseUrl;
-    private readonly apiKey;
-    private readonly fetchImpl;
-    constructor(options: CadenceClientOptions);
-    private request;
-}
-export declare function createCadenceClient(options: CadenceClientOptions): CadenceClient;
 export declare function submitAppRegistration(options: SubmitAppRegistrationOptions, request: AppRegistrationRequest): Promise<AppRegistrationResponse>;
 export declare function getAppRegistrationStatus(options: AppRegistrationStatusOptions, appRegistrationId: string): Promise<AppRegistrationStatusResponse>;
+export declare function normalizeApiBaseUrl(apiBaseUrl: string): string;

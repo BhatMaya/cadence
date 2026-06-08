@@ -1,7 +1,7 @@
 {
   "name": "@cadence-auth/cadence",
   "version": "0.1.0",
-  "description": "Keystroke dynamics capture library.",
+  "description": "Cadence password auth, typing capture, and 2FA integration helpers.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

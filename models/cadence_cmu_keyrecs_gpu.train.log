@@ -1,0 +1,24 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1780863790.686371       3 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+I0000 00:00:1780863790.714830       3 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI AVX512_BF16 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1780863791.500134       3 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+/home/artunjay/.config/matplotlib is not a writable directory
+Matplotlib created a temporary cache directory at /tmp/matplotlib-zddwagu1 because there was an issue with the default path (/home/artunjay/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+E0000 00:00:1780863792.892044       3 cuda_platform.cc:52] failed call to cuInit: INTERNAL: CUDA error: Failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected
+Traceback (most recent call last):
+  File "/home/artunjay/college/cse481s/github_cadence/cadence/train.py", line 754, in <module>
+    main()
+    ~~~~^^
+  File "/home/artunjay/college/cse481s/github_cadence/cadence/train.py", line 586, in main
+    tf = configure_tensorflow(
+        device=args.device,
+        memory_growth=not args.no_gpu_memory_growth,
+        mixed_precision=args.mixed_precision,
+    )
+  File "/home/artunjay/college/cse481s/github_cadence/cadence/train.py", line 38, in configure_tensorflow
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: GPU training requested, but TensorFlow does not see any GPU. Install a CUDA-enabled TensorFlow build or run with --device cpu.

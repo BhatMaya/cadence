@@ -11,3 +11,5 @@ __pycache__/
 venv/
 datasets/cmu/*.csv
 datasets/cmu/features.json
+datasets/keyrecs/**/*.csv
+datasets/keyrecs/**/*.json
