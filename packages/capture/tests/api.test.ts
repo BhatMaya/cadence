@@ -232,6 +232,56 @@ describe('CadenceAuthClient', () => {
     await expect(client.logout({ username: 'alice' }))
       .resolves.toMatchObject({ status: 'logged out' });
   });
+
+  it('changes passwords and unblocks users through recovery routes', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/password/change')) {
+        return jsonResponse({ status: 'password_changed', user_id: 'user-1' });
+      }
+      return jsonResponse({
+        status: 'unblocked',
+        user_id: 'user-1',
+        current_login_status: 'not logged in'
+      });
+    });
+    const client = createCadenceAuthClient({
+      apiBaseUrl: 'https://api.example.test',
+      apiKey: 'sk_live_test',
+      fetchImpl
+    });
+
+    await expect(client.changePassword({
+      username: 'alice',
+      current_password: 'CurrentPassword123!',
+      new_password: 'BetterPassword456!'
+    })).resolves.toMatchObject({ status: 'password_changed' });
+    await expect(client.unblockUser({ username: 'alice' }))
+      .resolves.toMatchObject({ status: 'unblocked' });
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      'https://api.example.test/password/change',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer sk_live_test',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: 'alice',
+          current_password: 'CurrentPassword123!',
+          new_password: 'BetterPassword456!'
+        })
+      })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      'https://api.example.test/users/unblock',
+      expect.objectContaining({
+        body: JSON.stringify({ username: 'alice' })
+      })
+    );
+  });
 });
 
 describe('createPasswordAuthController', () => {

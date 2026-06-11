@@ -61,6 +61,26 @@ export interface LogoutResponse {
     readonly status: 'logged out' | 'user not found' | 'error' | string;
     readonly message?: string;
 }
+export interface ChangePasswordRequest {
+    username: string;
+    current_password: string;
+    new_password: string;
+}
+export interface ChangePasswordResponse {
+    readonly status: 'password_changed' | 'user not found' | 'error' | string;
+    readonly user_id?: string;
+    readonly message?: string;
+}
+export interface UnblockUserRequest {
+    username?: string;
+    user_id?: string;
+}
+export interface UnblockUserResponse {
+    readonly status: 'unblocked' | 'user not found' | 'error' | string;
+    readonly user_id?: string;
+    readonly current_login_status?: string;
+    readonly message?: string;
+}
 export declare class CadenceAuthClient {
     private readonly apiBaseUrl;
     private readonly apiKey?;
@@ -72,6 +92,8 @@ export declare class CadenceAuthClient {
     verifyCode(request: VerifyCodeRequest): Promise<VerifyCodeResponse>;
     resendCode(request: ResendCodeRequest): Promise<ResendCodeResponse>;
     logout(request: LogoutRequest): Promise<LogoutResponse>;
+    changePassword(request: ChangePasswordRequest): Promise<ChangePasswordResponse>;
+    unblockUser(request: UnblockUserRequest): Promise<UnblockUserResponse>;
     private post;
 }
 export declare function createCadenceAuthClient(options: CadenceAuthClientOptions): CadenceAuthClient;
@@ -112,6 +134,8 @@ export interface PasswordAuthController {
     verifyCode(request: VerifyCodeRequest): Promise<VerifyCodeResponse>;
     resendCode(request: ResendCodeRequest): Promise<ResendCodeResponse>;
     logout(request?: LogoutRequest): Promise<LogoutResponse>;
+    changePassword(request: ChangePasswordRequest): Promise<ChangePasswordResponse>;
+    unblockUser(request?: UnblockUserRequest): Promise<UnblockUserResponse>;
     on<E extends CaptureEvent['type']>(event: E, handler: (payload: Extract<CaptureEvent, {
         type: E;
     }>) => void): () => void;
