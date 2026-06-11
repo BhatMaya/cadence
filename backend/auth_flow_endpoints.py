@@ -22,18 +22,10 @@ def signup():
         return jsonify({"status": "error", "message": "missing password"}), 400
     if not username:
         return jsonify({"status": "error", "message": "missing username"}), 400
-    if len(password) < 16:
-        return jsonify({"status": "error", "message": "Password must be at least 16 characters."}), 400
-    if not re.search(r'[A-Z]', password):
-        return jsonify({"status": "error", "message": "Password must contain at least one uppercase letter."}), 400
-    if not re.search(r'[a-z]', password):
-        return jsonify({"status": "error", "message": "Password must contain at least one lowercase letter."}), 400
-    if not re.search(r'[0-9]', password):
-        return jsonify({"status": "error", "message": "Password must contain at least one number."}), 400
-    if not re.search(r'[^A-Za-z0-9]', password):
-        return jsonify({"status": "error", "message": "Password must contain at least one special character."}), 400
-    if username.lower() in password.lower():
-        return jsonify({"status": "error", "message": "Password must not contain your username."}), 400
+
+    policy_error = password_policy_error(password, username)
+    if policy_error:
+        return jsonify({"status": "error", "message": policy_error}), 400
 
     try:
         existing_user = supabase.table("user_profiles") \
@@ -100,6 +92,89 @@ def signup():
         }), 502
 
     return jsonify({"status": "signup_success", "user_id": user_id}), 200
+
+
+@app.post("/password/change")
+@limiter.limit("5 per minute; 20 per hour")
+@require_api_key
+def change_password():
+    data = request.json or {}
+    username = data.get("username")
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
+
+    if not username:
+        return jsonify({"status": "error", "message": "missing username"}), 400
+    if not current_password:
+        return jsonify({"status": "error", "message": "missing current_password"}), 400
+    if not new_password:
+        return jsonify({"status": "error", "message": "missing new_password"}), 400
+
+    policy_error = password_policy_error(new_password, username)
+    if policy_error:
+        return jsonify({"status": "error", "message": policy_error}), 400
+
+    profile, profile_error = get_app_user_profile(username=username)
+    if profile_error == "forbidden":
+        return error_response("forbidden", 403, "forbidden")
+    if profile_error:
+        return jsonify({"status": "user not found"}), 200
+
+    try:
+        sign_in_result = _supabase_sign_in(profile.get("email"), current_password)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid credentials"}), 401
+
+    if auth_sign_in_error(sign_in_result):
+        return jsonify({"status": "error", "message": "invalid credentials"}), 401
+
+    try:
+        _supabase_update_password(profile["user_id"], new_password)
+    except Exception as exc:
+        app.logger.exception("password update failed for user_id=%s", profile.get("user_id"))
+        return jsonify({
+            "status": "error",
+            "message": f"could not update password: {exc}",
+        }), 502
+
+    supabase.table("user_profiles") \
+        .update({
+            "current_login_status": "not logged in",
+            "failed_password_attempts": 0,
+        }) \
+        .eq("user_id", profile["user_id"]) \
+        .execute()
+
+    return jsonify({"status": "password_changed", "user_id": profile["user_id"]}), 200
+
+
+@app.post("/users/unblock")
+@limiter.limit("10 per minute; 100 per hour")
+@require_api_key
+def unblock_user():
+    data = request.json or {}
+    username = data.get("username")
+    user_id = data.get("user_id")
+
+    if not username and not user_id:
+        return jsonify({"status": "error", "message": "missing username or user_id"}), 400
+
+    profile, profile_error = get_app_user_profile(username=username, user_id=user_id)
+    if profile_error == "forbidden":
+        return error_response("forbidden", 403, "forbidden")
+    if profile_error:
+        return jsonify({"status": "user not found"}), 200
+
+    supabase.table("user_profiles") \
+        .update({"current_login_status": "not logged in"}) \
+        .eq("user_id", profile["user_id"]) \
+        .execute()
+
+    return jsonify({
+        "status": "unblocked",
+        "user_id": profile["user_id"],
+        "current_login_status": "not logged in",
+    }), 200
 
 
 @app.post("/authenticate")

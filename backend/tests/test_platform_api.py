@@ -103,6 +103,24 @@ class FakeSupabase:
                 }
             ],
             "api_keys": [],
+            "user_profiles": [
+                {
+                    "user_id": "user-1",
+                    "username": "alice",
+                    "email": "alice@example.com",
+                    "application_id": "app-1",
+                    "current_login_status": "pending 2fa",
+                    "failed_password_attempts": 2,
+                },
+                {
+                    "user_id": "user-other",
+                    "username": "mallory",
+                    "email": "mallory@example.com",
+                    "application_id": "app-other",
+                    "current_login_status": "locked",
+                    "failed_password_attempts": 0,
+                },
+            ],
         }
         self.next_id = 1
 
@@ -142,7 +160,17 @@ class FakeAuth:
                 email="new@partner.example",
                 email_confirmed_at=None,
             ),
+            "end-user-token": FakeAuthObject(
+                id="user-1",
+                email="alice@example.com",
+                email_confirmed_at="2026-01-01T00:00:00+00:00",
+            ),
         }
+        self.passwords_by_email = {
+            "alice@example.com": "CurrentPassword123!",
+        }
+        self.password_updates = []
+        self.admin = FakeAuthAdmin(self)
 
     def get_user(self, token):
         user = self.users_by_token.get(token)
@@ -163,6 +191,8 @@ class FakeAuth:
 
     def sign_in_with_password(self, payload):
         email = payload.get("email")
+        if email in self.passwords_by_email and payload.get("password") != self.passwords_by_email[email]:
+            raise ValueError("invalid credentials")
         user = next(
             (
                 candidate
@@ -189,6 +219,27 @@ class FakeAuth:
         )
 
 
+class FakeAuthAdmin:
+    def __init__(self, auth):
+        self.auth = auth
+
+    def update_user_by_id(self, user_id, payload=None, **kwargs):
+        data = payload or kwargs
+        user = next(
+            (
+                candidate
+                for candidate in self.auth.users_by_token.values()
+                if candidate.id == user_id
+            ),
+            None,
+        )
+        if not user:
+            raise ValueError("user not found")
+        self.auth.passwords_by_email[user.email] = data["password"]
+        self.auth.password_updates.append((user_id, data["password"]))
+        return FakeAuthObject(user=user)
+
+
 class FakeSupabaseAuthClient:
     def __init__(self):
         self.auth = FakeAuth()
@@ -213,6 +264,8 @@ class PlatformApiTest(unittest.TestCase):
         self.original_allow_open_admin = cadence_app.ALLOW_OPEN_ADMIN
         self.original_allowed_origins = set(cadence_app.ALLOWED_ORIGINS)
         self.fake_supabase = FakeSupabase()
+        self.fake_supabase_auth = FakeSupabaseAuthClient()
+        self.fake_supabase.auth = self.fake_supabase_auth.auth
         api_key = "sk_live_test_key_for_platform_flow"
         self.api_key = api_key
         self.fake_supabase.tables["api_keys"].append({
@@ -223,7 +276,7 @@ class PlatformApiTest(unittest.TestCase):
             "revoked_at": None,
         })
         cadence_app.supabase = self.fake_supabase
-        cadence_app.supabase_auth = FakeSupabaseAuthClient()
+        cadence_app.supabase_auth = self.fake_supabase_auth
         cadence_app.model_service = FakeModelService()
         cadence_app.ADMIN_TOKEN = ""
         cadence_app.ALLOW_OPEN_ADMIN = True
@@ -577,6 +630,67 @@ class PlatformApiTest(unittest.TestCase):
             response.get_json()["message"],
             "origin is not allowed for this application",
         )
+
+    def test_change_password_updates_supabase_and_logs_out_user(self):
+        response = self.client.post(
+            "/password/change",
+            json={
+                "username": "alice",
+                "current_password": "CurrentPassword123!",
+                "new_password": "BetterPassword456!",
+            },
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "password_changed")
+        self.assertEqual(
+            cadence_app.supabase_auth.auth.password_updates,
+            [("user-1", "BetterPassword456!")],
+        )
+        profile = self.fake_supabase.tables["user_profiles"][0]
+        self.assertEqual(profile["current_login_status"], "not logged in")
+        self.assertEqual(profile["failed_password_attempts"], 0)
+
+    def test_change_password_rejects_wrong_current_password(self):
+        response = self.client.post(
+            "/password/change",
+            json={
+                "username": "alice",
+                "current_password": "WrongPassword123!",
+                "new_password": "BetterPassword456!",
+            },
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["message"], "invalid credentials")
+        self.assertEqual(cadence_app.supabase_auth.auth.password_updates, [])
+
+    def test_unblock_user_clears_current_login_status_only(self):
+        response = self.client.post(
+            "/users/unblock",
+            json={"username": "alice"},
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["status"], "unblocked")
+        self.assertEqual(body["current_login_status"], "not logged in")
+        profile = self.fake_supabase.tables["user_profiles"][0]
+        self.assertEqual(profile["current_login_status"], "not logged in")
+        self.assertEqual(profile["failed_password_attempts"], 2)
+
+    def test_unblock_user_rejects_users_from_other_applications(self):
+        response = self.client.post(
+            "/users/unblock",
+            json={"username": "mallory"},
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["status"], "forbidden")
 
     def test_cors_preflight_allows_admin_token_header(self):
         cadence_app.ALLOWED_ORIGINS = {"https://console.example"}

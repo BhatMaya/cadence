@@ -43,6 +43,61 @@ def _handle_failed_password(user_id, current_failures):
     }
 
 
+def password_policy_error(password, username):
+    """Return the first password-policy error message, or None when valid."""
+    if len(password) < 16:
+        return "Password must be at least 16 characters."
+    if not re.search(r"[A-Z]", password):
+        return "Password must contain at least one uppercase letter."
+    if not re.search(r"[a-z]", password):
+        return "Password must contain at least one lowercase letter."
+    if not re.search(r"[0-9]", password):
+        return "Password must contain at least one number."
+    if not re.search(r"[^A-Za-z0-9]", password):
+        return "Password must contain at least one special character."
+    if username and username.lower() in password.lower():
+        return "Password must not contain your username."
+    return None
+
+
+def _supabase_update_password(user_id, new_password):
+    """Update a Supabase Auth user's password through the admin client."""
+    admin = supabase.auth.admin
+    try:
+        return admin.update_user_by_id(user_id, {"password": new_password})
+    except TypeError:
+        return admin.update_user_by_id(user_id, password=new_password)
+
+
+def auth_sign_in_error(sign_in_result):
+    """Normalize Supabase auth return shapes into an error object/string."""
+    if isinstance(sign_in_result, dict):
+        return sign_in_result.get("error")
+    return getattr(sign_in_result, "error", None)
+
+
+def get_app_user_profile(username=None, user_id=None):
+    """Fetch a user profile that belongs to the API key's application."""
+    if not username and not user_id:
+        return None, "missing user identifier"
+
+    query = supabase.table("user_profiles").select("*")
+    if user_id:
+        query = query.eq("user_id", user_id)
+    else:
+        query = query.eq("username", username)
+
+    result = query.execute()
+    rows = result.data or []
+    if not rows:
+        return None, "user not found"
+
+    profile = rows[0]
+    if profile.get("application_id") != request.cadence_application["application_id"]:
+        return None, "forbidden"
+    return profile, None
+
+
 # Thresholds derived from the observed automated 10ms-apart typing script.
 # They are environment-backed so production can tune without code changes.
 _MIN_MEAN_INTERVAL_MS = float(os.getenv("CADENCE_MIN_MEAN_INTERVAL_MS", "30"))
