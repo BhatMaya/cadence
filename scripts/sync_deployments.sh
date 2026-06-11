@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Sync source-of-truth files from the GitLab checkout into the local GitHub
-# deployment worktrees used by this project.
+# deployment worktrees used by this project:
+#   - Backend / Render: https://github.com/BhatMaya/cadence.git
+#   - Frontend / Vercel: https://github.com/aryamanrtunjay/cadence.git
 #
 # This intentionally copies only source/docs/package artifacts. It does not
 # copy .env files, virtualenvs, logs, .next output, or deployment-only scripts.

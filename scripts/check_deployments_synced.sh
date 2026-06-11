@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Verify that source-of-truth files match the local GitHub deployment worktrees.
+# Verify that source-of-truth files match the local GitHub deployment worktrees:
+#   - Backend / Render: https://github.com/BhatMaya/cadence.git
+#   - Frontend / Vercel: https://github.com/aryamanrtunjay/cadence.git
 
 set -euo pipefail
 

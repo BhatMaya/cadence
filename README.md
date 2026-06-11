@@ -175,6 +175,14 @@ Do not set
 Deployment details for the Render backend, Vercel frontend, and sibling
 GitHub worktree sync are in `docs/deployment.md`.
 
+### Deployment Repositories
+
+This GitLab checkout is the source-of-truth submission repository. The
+deployed apps are hosted from two GitHub deployment repositories:
+
+- Frontend on Vercel: <https://github.com/aryamanrtunjay/cadence.git>
+- Backend on Render: <https://github.com/BhatMaya/cadence.git>
+
 ## App-scoped API quickstart
 
 Cadence can also run as a platform API for other applications. A

@@ -1,12 +1,17 @@
 # Cadence Deployment
 
-This repo remains the source of truth. The GitHub deployment worktrees are
-updated with `scripts/sync_deployments.sh` and checked with
+This GitLab repo remains the source of truth for submission. The deployed
+apps are hosted from separate GitHub deployment repositories and kept in
+sync with `scripts/sync_deployments.sh` and
 `scripts/check_deployments_synced.sh`.
+
+- Frontend on Vercel: <https://github.com/aryamanrtunjay/cadence.git>
+- Backend on Render: <https://github.com/BhatMaya/cadence.git>
 
 ## Backend: Render
 
-Use the backend deployment worktree at `../cadence_github/cadence`.
+Use Maya's backend deployment worktree at `../cadence_github/cadence`
+or clone <https://github.com/BhatMaya/cadence.git>.
 `render.yaml` defines the Render web service and a small Redis-compatible
 store for shared rate limiting.
 
@@ -34,7 +39,8 @@ Operational settings:
 
 ## Frontend: Vercel
 
-Use the frontend deployment worktree at `../github_cadence/cadence`.
+Use Aryaman's frontend deployment worktree at `../github_cadence/cadence`
+or clone <https://github.com/aryamanrtunjay/cadence.git>.
 Configure the Vercel project with Root Directory `frontend`; the
 `frontend/vercel.json` file then sets the Next.js framework, `npm ci`, and
 `npm run build`. Vercel documents Root Directory as a project setting for
@@ -66,7 +72,8 @@ After deployment, open:
 4. Commit and push the source, backend deployment, and frontend deployment
    worktrees.
 5. Apply any required schema changes in the Supabase SQL editor.
-6. Let Render and Vercel deploy from their GitHub deployment repos.
+6. Let Render deploy from Maya's GitHub repo and Vercel deploy from
+   Aryaman's GitHub repo.
 7. Verify the frontend is publicly reachable:
 
    ```bash

@@ -1,8 +1,11 @@
 # Cadence Release Checklist
 
-This repo is the source of truth. The sibling GitHub worktrees are
-deployment copies and should be updated from this checkout before they
-are pushed.
+This GitLab repo is the source of truth for submission. The deployed apps
+are hosted from sibling GitHub deployment repos and should be updated
+from this checkout before they are pushed:
+
+- Frontend on Vercel: <https://github.com/aryamanrtunjay/cadence.git>
+- Backend on Render: <https://github.com/BhatMaya/cadence.git>
 
 ## One-time production setup
 
@@ -51,8 +54,8 @@ are pushed.
    git -C ../github_cadence/cadence status --short
    ```
 
-5. Commit and push the GitLab source tree, the backend deployment tree,
-   and the frontend deployment tree.
+5. Commit and push the GitLab source tree, Maya's backend deployment
+   repo, and Aryaman's frontend deployment repo.
 6. Apply any production schema changes in the Supabase SQL editor before
    deploying backend code that depends on them.
 
