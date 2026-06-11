@@ -718,6 +718,45 @@ def get_developer_app_usage(application_id):
     return jsonify({"status": "ok", "usage": usage})
 
 
+@app.patch("/v1/developer/apps/<application_id>/threshold")
+@limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
+@require_developer
+def set_developer_app_threshold(application_id):
+    application, app_error = developer_application_or_error(application_id)
+    if app_error:
+        return app_error
+
+    data = get_json_body()
+    threshold = data.get("threshold")
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        return error_response("threshold must be one of 0.55, 0.68, or 0.72")
+
+    allowed_thresholds = {0.55, 0.68, 0.72}
+    if threshold not in allowed_thresholds:
+        return error_response("threshold must be one of 0.55, 0.68, or 0.72")
+
+    result = supabase.table("applications") \
+        .update({
+            "threshold": threshold,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }) \
+        .eq("application_id", application["application_id"]) \
+        .execute()
+    updated_application = (result.data or [None])[0] or {
+        **application,
+        "threshold": threshold,
+    }
+
+    return jsonify({
+        "status": "ok",
+        "application": updated_application,
+        "application_id": application["application_id"],
+        "threshold": threshold,
+    })
+
+
 @app.get("/v1/developer/apps/<application_id>/api-keys")
 @limiter.limit(PLATFORM_WRITE_RATE_LIMIT)
 @require_developer

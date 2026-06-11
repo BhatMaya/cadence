@@ -65,6 +65,16 @@ export default function Console() {
     });
   }
 
+  function handleAppUpdated(updatedApp) {
+    setApps((current) =>
+      current.map((app) =>
+        app.application_id === updatedApp.application_id
+          ? { ...app, ...updatedApp }
+          : app
+      )
+    );
+  }
+
   const selectedApp = apps.find((a) => a.application_id === selectedId) || null;
 
   return (
@@ -152,6 +162,7 @@ export default function Console() {
               app={selectedApp}
               onAuthError={handleAuthError}
               onRevealKey={(payload) => setRevealKey(payload)}
+              onAppUpdated={handleAppUpdated}
             />
           ) : (
             !loading &&

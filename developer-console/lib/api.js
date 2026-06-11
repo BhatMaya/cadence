@@ -95,6 +95,13 @@ export function createApp({ name, slug, allowed_origins, key_name }) {
   });
 }
 
+export function updateAppThreshold(applicationId, { threshold }) {
+  return request(`/v1/developer/apps/${applicationId}/threshold`, {
+    method: "PATCH",
+    body: { threshold },
+  });
+}
+
 // ---- API key management ---------------------------------------------------
 
 export function listApiKeys(applicationId) {
