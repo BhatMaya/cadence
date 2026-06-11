@@ -503,10 +503,35 @@ def resend_code():
         "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
-        "html": f"<p>Your one-time code is: {otp}</p><p>Didn't attempt this login? <a href='{request.host_url}report-fraud/{login_attempt_id}'>Report it as fraud.</a></p>"
+        "html": security_email_html(otp, login_attempt_id),
     })
 
     return jsonify({"status": "code sent"}), 200
+
+
+@app.get("/unblock-login/<login_attempt_id>")
+def unblock_login_confirm(login_attempt_id):
+    return f"""
+    <html><body>
+      <p>Clear the pending login for this code?</p>
+      <p>This will not sign you in. It only lets you start a fresh login attempt.</p>
+      <form method="POST" action="/unblock-login/{login_attempt_id}">
+        <button type="submit">Yes, unblock my login</button>
+      </form>
+    </body></html>
+    """, 200
+
+
+@app.post("/unblock-login/<login_attempt_id>")
+def unblock_login_from_email(login_attempt_id):
+    attempt = clear_pending_login_attempt(login_attempt_id)
+    if not attempt:
+        return "<p>This login link is no longer valid.</p>", 404
+
+    return (
+        "<p>Your pending login has been cleared.</p>"
+        "<p>You can return to the app and sign in again.</p>"
+    ), 200
 
 
 @app.get("/report-fraud/<login_attempt_id>")
@@ -542,6 +567,10 @@ def report_fraud(login_attempt_id):
                 .update({"current_login_status": "not logged in"}) \
                 .eq("user_id", user_id) \
                 .execute()
+            supabase.table("_2fa") \
+                .delete() \
+                .eq("login_attempt_id", login_attempt_id) \
+                .execute()
         ip = row.get("ip_address")
         if ip:
             existing = supabase.table("blocked_ips").select("offense_count").eq("ip_address", ip).execute()
@@ -553,4 +582,4 @@ def report_fraud(login_attempt_id):
             else:
                 supabase.table("blocked_ips").insert({"ip_address": ip, "offense_count": 1}).execute()
 
-    return "<p>Thanks for letting us know. The login attempt has been flagged as fraud.</p>", 200
+    return password_change_prompt_html(), 200

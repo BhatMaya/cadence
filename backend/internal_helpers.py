@@ -98,6 +98,70 @@ def get_app_user_profile(username=None, user_id=None):
     return profile, None
 
 
+def security_email_html(otp, login_attempt_id):
+    """Build the OTP email with both fraud-report and self-unblock options."""
+    base_url = request.host_url.rstrip("/")
+    report_url = f"{base_url}/report-fraud/{login_attempt_id}"
+    unblock_url = f"{base_url}/unblock-login/{login_attempt_id}"
+    return (
+        f"<p>Your one-time code is: <strong>{otp}</strong></p>"
+        "<p>If you requested this code but got stuck, you can clear the pending "
+        f"login and start over: <a href='{unblock_url}'>unblock my login</a>.</p>"
+        "<p>If you did not request this login, report it immediately: "
+        f"<a href='{report_url}'>report it as fraud</a>.</p>"
+    )
+
+
+def password_change_prompt_html():
+    """Return the post-fraud safety prompt shown from email-report links."""
+    change_url = os.getenv("CADENCE_PASSWORD_CHANGE_URL", "").strip()
+    change_link = (
+        f"<p><a href='{change_url}'>Change your password now</a></p>"
+        if change_url
+        else "<p>Open the Cadence app and change your password before signing in again.</p>"
+    )
+    return (
+        "<p>Thanks for letting us know. The login attempt has been flagged as fraud.</p>"
+        "<p>Your account has been signed out to stop the pending login.</p>"
+        "<h2>Change your password next</h2>"
+        "<p>This report means someone may know your password. Choose a new password "
+        "before trying to sign in again.</p>"
+        f"{change_link}"
+    )
+
+
+def fetch_login_attempt(login_attempt_id, columns="ip_address, user_id"):
+    """Return a login_attempts row by id, or None when the email link is stale."""
+    result = supabase.table("login_attempts") \
+        .select(columns) \
+        .eq("login_attempt_id", login_attempt_id) \
+        .execute()
+    return (result.data or [None])[0]
+
+
+def clear_pending_login_attempt(login_attempt_id, reset_failures=False):
+    """Clear the user login state attached to a pending email action link."""
+    attempt = fetch_login_attempt(login_attempt_id)
+    if not attempt:
+        return None
+
+    user_id = attempt.get("user_id")
+    if user_id:
+        update_payload = {"current_login_status": "not logged in"}
+        if reset_failures:
+            update_payload["failed_password_attempts"] = 0
+        supabase.table("user_profiles") \
+            .update(update_payload) \
+            .eq("user_id", user_id) \
+            .execute()
+
+    supabase.table("_2fa") \
+        .delete() \
+        .eq("login_attempt_id", login_attempt_id) \
+        .execute()
+    return attempt
+
+
 # Thresholds derived from the observed automated 10ms-apart typing script.
 # They are environment-backed so production can tune without code changes.
 _MIN_MEAN_INTERVAL_MS = float(os.getenv("CADENCE_MIN_MEAN_INTERVAL_MS", "30"))
@@ -220,6 +284,6 @@ def send_code(user_id, login_attempt_id):
         "from": RESEND_FROM_EMAIL,
         "to": email,
         "subject": "Verification Code",
-        "html": f"<p>Your one-time code is: {otp}</p><p>Didn't attempt this login? <a href='{request.host_url}report-fraud/{login_attempt_id}'>Report it as fraud.</a></p>"
+        "html": security_email_html(otp, login_attempt_id),
     })
     return otp

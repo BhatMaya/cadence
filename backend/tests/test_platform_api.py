@@ -16,6 +16,7 @@ class FakeQuery:
         self.selected_columns = None
         self.insert_payload = None
         self.update_payload = None
+        self.delete_requested = False
         self.limit_value = None
 
     def select(self, columns="*"):
@@ -28,7 +29,11 @@ class FakeQuery:
         return self
 
     def eq(self, column, value):
-        self.filters.append((column, value))
+        self.filters.append(("eq", column, value))
+        return self
+
+    def is_(self, column, value):
+        self.filters.append(("is", column, value))
         return self
 
     def order(self, *_args, **_kwargs):
@@ -44,6 +49,10 @@ class FakeQuery:
 
     def update(self, payload):
         self.update_payload = payload
+        return self
+
+    def delete(self):
+        self.delete_requested = True
         return self
 
     def execute(self):
@@ -64,12 +73,21 @@ class FakeQuery:
             return FakeResult(inserted)
 
         matched = list(rows)
-        for column, value in self.filters:
-            matched = [row for row in matched if row.get(column) == value]
+        for operator, column, value in self.filters:
+            if operator == "eq":
+                matched = [row for row in matched if row.get(column) == value]
+            elif operator == "is" and value == "null":
+                matched = [row for row in matched if row.get(column) is None]
 
         if self.update_payload is not None:
             for row in matched:
                 row.update(self.update_payload)
+            return FakeResult(matched)
+
+        if self.delete_requested:
+            self.db.tables[self.table_name] = [
+                row for row in rows if row not in matched
+            ]
             return FakeResult(matched)
 
         if self.limit_value is not None:
@@ -121,6 +139,23 @@ class FakeSupabase:
                     "failed_password_attempts": 0,
                 },
             ],
+            "login_attempts": [
+                {
+                    "login_attempt_id": "attempt-1",
+                    "user_id": "user-1",
+                    "ip_address": "203.0.113.10",
+                    "successful_login": None,
+                },
+            ],
+            "_2fa": [
+                {
+                    "login_attempt_id": "attempt-1",
+                    "user_id": "user-1",
+                    "otp_hash": "hash",
+                    "attempt_count": 0,
+                },
+            ],
+            "blocked_ips": [],
         }
         self.next_id = 1
 
@@ -691,6 +726,44 @@ class PlatformApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["status"], "forbidden")
+
+    def test_security_email_includes_report_and_self_unblock_links(self):
+        with cadence_app.app.test_request_context(base_url="https://api.example.test/"):
+            html = cadence_app.security_email_html("123456", "attempt-1")
+
+        self.assertIn("Your one-time code", html)
+        self.assertIn("https://api.example.test/report-fraud/attempt-1", html)
+        self.assertIn("https://api.example.test/unblock-login/attempt-1", html)
+
+    def test_email_unblock_link_clears_pending_status_and_invalidates_code(self):
+        response = self.client.post("/unblock-login/attempt-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("pending login has been cleared", response.get_data(as_text=True))
+        profile = self.fake_supabase.tables["user_profiles"][0]
+        self.assertEqual(profile["current_login_status"], "not logged in")
+        self.assertEqual(self.fake_supabase.tables["_2fa"], [])
+
+    def test_report_fraud_prompts_password_change_and_invalidates_code(self):
+        response = self.client.post("/report-fraud/attempt-1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("flagged as fraud", body)
+        self.assertIn("Change your password next", body)
+        self.assertEqual(
+            self.fake_supabase.tables["login_attempts"][0]["successful_login"],
+            "fraud",
+        )
+        self.assertEqual(
+            self.fake_supabase.tables["user_profiles"][0]["current_login_status"],
+            "not logged in",
+        )
+        self.assertEqual(self.fake_supabase.tables["_2fa"], [])
+        self.assertEqual(
+            self.fake_supabase.tables["blocked_ips"],
+            [{"ip_address": "203.0.113.10", "offense_count": 1}],
+        )
 
     def test_cors_preflight_allows_admin_token_header(self):
         cadence_app.ALLOWED_ORIGINS = {"https://console.example"}
