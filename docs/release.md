@@ -23,8 +23,8 @@ are pushed.
    rate-limit storage URL, and confirm `CADENCE_ALLOW_OPEN_ADMIN` is
    unset or `0`.
 5. Configure the Render and Vercel projects from `docs/deployment.md`.
-6. Configure frontend deployment with
-   `NEXT_PUBLIC_SYNERGYZE_API_BASE=<backend-url>`.
+6. Configure frontend deployment with `SYNERGYZE_API_BASE=<backend-url>`
+   and the Synergyze app's server-side `CADENCE_API_KEY`.
 
 ## Per-release flow
 
@@ -84,9 +84,11 @@ After deploy, verify:
 4. A developer registration request can be submitted.
 5. An operator can approve the request and receive the first
    `sk_live_...` key once.
-6. A trusted integration backend can call `/v1/enroll`.
-7. A user with enrollment samples can call `/v1/score` and receive
-   `match`, `score`, and `confidence`.
+6. The Synergyze proxy can call `/signup`, `/authenticate`,
+   `/code_verification`, `/resend_code`, `/password/change`, and
+   `/users/unblock` with the configured `CADENCE_API_KEY`.
+7. Email security links for `/unblock-login/<login_attempt_id>` and
+   `/report-fraud/<login_attempt_id>` render public confirmation pages.
 
 Run the API flow with:
 
@@ -97,9 +99,8 @@ python scripts/smoke_platform_api.py
 ```
 
 The smoke test creates a registration, verifies its lookup token before
-and after approval, enrolls a synthetic user, scores a sample, verifies
-operator usage counts, and revokes the generated key unless `--keep-key`
-is set.
+and after approval, verifies operator usage counts, and revokes the
+generated key unless `--keep-key` is set.
 
 ## Rollback notes
 
