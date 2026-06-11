@@ -44,7 +44,7 @@ document.querySelector('#password')!.addEventListener('focus', () => auth.start(
 The controller owns the capture lifecycle. It starts keystroke capture, stops it
 on submit, sends `/authenticate`, clears poisoned samples, restarts capture for
 retryable failures, and exposes helpers for `/code_verification`,
-`/resend_code`, and `/logout`.
+`/resend_code`, `/logout`, `/password/change`, and `/users/unblock`.
 
 ## App-scoped auth client
 
@@ -74,6 +74,14 @@ if (login.status === '2fa required') {
     code: '123456'
   });
 }
+
+await cadence.changePassword({
+  username: 'alice',
+  current_password: 'correct horse battery staple',
+  new_password: 'a much better password!2'
+});
+
+await cadence.unblockUser({ username: 'alice' });
 ```
 
 Use `apiKey` only from trusted server-side code, or call your own backend

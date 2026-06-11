@@ -13,28 +13,63 @@ cadence/
 ├── model.py           # siamese network architecture
 ├── train.py           # training loop
 ├── models/            # checkpointed weights + metrics
-└── scripts/setup.sh   # one-shot local setup
+└── scripts/setup.sh   # local dependency setup
 ```
 
-## Running locally
+## Running Locally
 
 The backend uses Supabase for auth + Postgres. To run end-to-end on a
-single machine without touching the cloud, we use the **Supabase CLI**,
-which spins up the same stack (Postgres, GoTrue, PostgREST, …) inside
-Docker. The application code is unchanged; it just talks to
-`http://localhost:54321` instead of `*.supabase.co`.
+single machine, the easiest grading path is to point `backend/.env` at
+the provisioned Supabase project. The checked-in `backend/schema.sql` is
+a legacy local bootstrap file; the current database schema was applied in
+the Supabase SQL editor and should not be re-applied to the provisioned
+project from this repo.
 
 ### Prerequisites
 
 | Tool | Purpose | Install |
 | --- | --- | --- |
-| Python 3.11+ | backend runtime | `brew install python` / your distro's package |
+| Python 3.12 | backend runtime (`backend/.python-version` pins 3.12.10) | `brew install python@3.12` / your distro's package |
 | Docker | hosts the local Supabase stack | https://docs.docker.com/get-docker/ |
 | Node.js/npm | frontend runtime and Supabase CLI fallback | https://nodejs.org/ |
-| Supabase CLI | manages the local stack | Optional if `npx supabase` works; otherwise install from https://supabase.com/docs/guides/cli |
-| `psql` | applies/inspects the schema | Optional; if missing, setup uses `psql` inside the Supabase database container |
+| Supabase CLI | manages an optional local Supabase stack | Optional if using the provisioned Supabase project |
+| `psql` | inspects or bootstraps an isolated local database | Optional |
 
-### One-shot setup
+### Fastest Grading Path
+
+Create `backend/.env` with the project credentials, then install and run
+the backend and frontend:
+
+```bash
+cat > backend/.env <<'EOF'
+SUPABASE_URL=<provided-supabase-url>
+SUPABASE_KEY=<provided-service-role-key>
+RESEND_KEY=
+CADENCE_DEMO_MODE=1
+CADENCE_ALLOW_OPEN_ADMIN=1
+CADENCE_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+EOF
+
+cd backend
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -c "from app import app; app.run(host='127.0.0.1', port=5001)"
+```
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:3000>, register, and sign in. With
+`CADENCE_DEMO_MODE=1`, verification codes are returned to the UI instead
+of being emailed, which keeps local grading deterministic.
+
+### Optional Isolated Supabase Setup
 
 From the repo root:
 
@@ -49,14 +84,23 @@ The script:
    (TensorFlow makes this slow on first run).
 3. Runs `supabase init` / `supabase start`, falling back to
    `npx supabase` if the CLI is not installed globally.
-4. Applies `backend/schema.sql` through `scripts/apply_schema.sh`, using
-   local `psql` when available or the Supabase database container otherwise.
+4. Skips `backend/schema.sql` by default because it is not the
+   authoritative project schema.
 5. Writes `backend/.env` with the local Supabase URL + service-role
    key, `CADENCE_DEMO_MODE=1`, `CADENCE_ALLOW_OPEN_ADMIN=1`, and local
    frontend CORS origins, so 2FA codes are returned in the API response
    (and shown in the UI banner) instead of emailed.
 
 It's idempotent — safe to re-run after pulling.
+
+For a throwaway local database only, opt into the legacy bootstrap SQL:
+
+```bash
+CADENCE_APPLY_LOCAL_SCHEMA=1 bash scripts/setup.sh
+```
+
+Do not use `scripts/apply_schema.sh` against the provisioned Supabase
+project unless the SQL has first been refreshed from the live schema.
 
 ### Running the stack
 
@@ -77,7 +121,8 @@ npm run dev
 Open <http://localhost:3000>, register, and sign in. The Synergyze demo owns
 the browser UI, then sends requests through its Next.js proxy route to the
 backend's app-scoped `/signup`, `/authenticate`, `/code_verification`,
-`/resend_code`, and `/logout` endpoints.
+`/resend_code`, `/logout`, `/password/change`, and `/users/unblock`
+endpoints.
 
 ### Useful commands
 
@@ -87,8 +132,8 @@ npx supabase status             # same, if the CLI is not installed globally
 supabase stop                   # tear down the Docker stack
 supabase stop --no-backup       # nuke the local Postgres data too
 
-# apply the schema to local Supabase or a production Postgres URL
-DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
+# legacy local-only schema bootstrap
+CADENCE_APPLY_LOCAL_SCHEMA=1 bash scripts/setup.sh
 
 # check the deployment folders are in sync before pushing them
 bash scripts/check_deployments_synced.sh
@@ -130,12 +175,20 @@ Do not set
 Deployment details for the Render backend, Vercel frontend, and sibling
 GitHub worktree sync are in `docs/deployment.md`.
 
+### Deployment Repositories
+
+This GitLab checkout is the source-of-truth submission repository. The
+deployed apps are hosted from two GitHub deployment repositories:
+
+- Frontend on Vercel: <https://github.com/aryamanrtunjay/cadence.git>
+- Backend on Render: <https://github.com/BhatMaya/cadence.git>
+
 ## App-scoped API quickstart
 
-Cadence can also run as a platform API for other applications. An
+Cadence can also run as a platform API for other applications. A
 confirmed developer account creates an application, gets a server-side
-API key, and the integrating app sends typing samples captured by the
-npm package to `/v1/enroll` and `/v1/score`.
+API key, and the integrating app calls the app-scoped password auth
+routes with typing samples captured by the npm package.
 
 Open `/developer`, create a developer account, confirm the Supabase email,
 then sign in and register an application. Cadence creates the application
@@ -190,6 +243,14 @@ const result = await cadence.authenticate({
 if (result.status === 'accepted') {
   console.log('Logged in');
 }
+
+await cadence.changePassword({
+  username: 'alice',
+  current_password: 'correct horse battery staple',
+  new_password: 'much better horse battery staple!2'
+});
+
+await cadence.unblockUser({ username: 'alice' });
 ```
 
 See `backend/ENDPOINTS.txt` for the full API notes,
@@ -199,10 +260,21 @@ checklist.
 
 ## Project layout details
 
-- **`backend/app.py`** — Flask routes for `/signup`, `/authenticate`,
-  `/logout`, `/code_verification`, `/resend_code`, `/health`,
-  `/model/health`, and the `/v1/*` platform API. See
-  `backend/ENDPOINTS.txt` for the full contract.
+- **`backend/app.py`** — Flask application setup, shared configuration,
+  Supabase clients, rate limits, CORS, and route-section loading.
+- **`backend/auth_flow_endpoints.py`** — app-scoped user auth routes:
+  `/signup`, `/authenticate`, `/logout`, `/code_verification`,
+  `/resend_code`, `/password/change`, `/users/unblock`, and the email
+  recovery/reporting pages.
+- **`backend/developer_portal_endpoints.py`** — developer signup/login,
+  self-serve app creation, API key management, and manual app
+  registration review routes.
+- **`backend/platform_endpoints.py`** — health checks, admin
+  app/key operations, app threshold changes, and app-scoped user status
+  support endpoints.
+- **`backend/internal_helpers.py`** — shared auth-flow helpers for OTP
+  email, fraud/unblock links, password policy, replay detection,
+  login-attempt creation, and model scoring glue.
 - **`backend/model_service.py`** — wraps the Keras siamese model;
   fetches a user's prior successful samples from
   `public.login_attempts`, normalizes both sides, runs them through the
@@ -212,9 +284,9 @@ checklist.
   features, and exposes typed Cadence auth helpers. The frontend imports
   the prebuilt dist from `frontend/vendor/`.
 - **`frontend/`** — Next.js app with client-side routes
-  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Synergyze browser
-  requests go through `/api/synergyze/*`; that server-side route forwards
-  to `SYNERGYZE_API_BASE` and attaches `CADENCE_API_KEY` for app-scoped
-  backend routes.
+  (`/`, `/register`, `/login`, `/recover`, `/twofa`, `/dashboard`).
+  Synergyze browser requests go through `/api/synergyze/*`; that
+  server-side route forwards to `SYNERGYZE_API_BASE` and attaches
+  `CADENCE_API_KEY` for app-scoped backend routes.
 - **`model.py` / `train.py`** — the model architecture and training
   loop. Pretrained weights live in `models/`.

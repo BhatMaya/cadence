@@ -1,8 +1,11 @@
 # Cadence Release Checklist
 
-This repo is the source of truth. The sibling GitHub worktrees are
-deployment copies and should be updated from this checkout before they
-are pushed.
+This GitLab repo is the source of truth for submission. The deployed apps
+are hosted from sibling GitHub deployment repos and should be updated
+from this checkout before they are pushed:
+
+- Frontend on Vercel: <https://github.com/aryamanrtunjay/cadence.git>
+- Backend on Render: <https://github.com/BhatMaya/cadence.git>
 
 ## One-time production setup
 
@@ -10,12 +13,9 @@ are pushed.
    `@cadence-auth/cadence`.
 2. Make sure the machine that will publish has npm access to
    `@cadence-auth/cadence`.
-3. Provision production Supabase and apply the schema:
-
-   ```bash
-   DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
-   ```
-
+3. Provision production Supabase and apply any required schema changes in
+   the Supabase SQL editor. `backend/schema.sql` is a legacy local
+   bootstrap file and is not the production source of truth.
 4. Configure backend secrets from `backend/.env.example`, including
    `DATABASE_URL`, `CADENCE_ADMIN_TOKEN`, `CADENCE_RSA_PRIVATE_KEY`,
    `RESEND_FROM_EMAIL`, `CADENCE_CORS_ORIGINS`, and
@@ -23,8 +23,8 @@ are pushed.
    rate-limit storage URL, and confirm `CADENCE_ALLOW_OPEN_ADMIN` is
    unset or `0`.
 5. Configure the Render and Vercel projects from `docs/deployment.md`.
-6. Configure frontend deployment with
-   `NEXT_PUBLIC_SYNERGYZE_API_BASE=<backend-url>`.
+6. Configure frontend deployment with `SYNERGYZE_API_BASE=<backend-url>`
+   and the Synergyze app's server-side `CADENCE_API_KEY`.
 
 ## Per-release flow
 
@@ -54,13 +54,10 @@ are pushed.
    git -C ../github_cadence/cadence status --short
    ```
 
-5. Commit and push the GitLab source tree, the backend deployment tree,
-   and the frontend deployment tree.
-6. Apply any production schema changes before deploying backend code:
-
-   ```bash
-   DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
-   ```
+5. Commit and push the GitLab source tree, Maya's backend deployment
+   repo, and Aryaman's frontend deployment repo.
+6. Apply any production schema changes in the Supabase SQL editor before
+   deploying backend code that depends on them.
 
 7. Publish the npm package after tests pass and the desired version is
    final:
@@ -84,9 +81,11 @@ After deploy, verify:
 4. A developer registration request can be submitted.
 5. An operator can approve the request and receive the first
    `sk_live_...` key once.
-6. A trusted integration backend can call `/v1/enroll`.
-7. A user with enrollment samples can call `/v1/score` and receive
-   `match`, `score`, and `confidence`.
+6. The Synergyze proxy can call `/signup`, `/authenticate`,
+   `/code_verification`, `/resend_code`, `/password/change`, and
+   `/users/unblock` with the configured `CADENCE_API_KEY`.
+7. Email security links for `/unblock-login/<login_attempt_id>` and
+   `/report-fraud/<login_attempt_id>` render public confirmation pages.
 
 Run the API flow with:
 
@@ -97,15 +96,13 @@ python scripts/smoke_platform_api.py
 ```
 
 The smoke test creates a registration, verifies its lookup token before
-and after approval, enrolls a synthetic user, scores a sample, verifies
-operator usage counts, and revokes the generated key unless `--keep-key`
-is set.
+and after approval, verifies operator usage counts, and revokes the
+generated key unless `--keep-key` is set.
 
 ## Rollback notes
 
-- Backend schema changes are written to be idempotent, but rollback
-  should usually deploy the prior backend code rather than dropping
-  columns.
+- Production schema changes are managed in Supabase. Rollback should
+  usually deploy the prior backend code rather than dropping columns.
 - API keys are only shown once. If a partner loses a key after rollback,
   create a new key and revoke the old one.
 - npm versions are immutable. Publish a new patch version instead of

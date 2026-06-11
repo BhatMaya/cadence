@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createCapture } from '../vendor/index.js';
 
-const VIEWS = ['landing', 'register', 'login', 'twofa', 'dashboard'];
+const VIEWS = ['landing', 'register', 'login', 'recover', 'twofa', 'dashboard'];
 const VIEW_SET = new Set(VIEWS);
 
 function readRouteFromLocation() {
@@ -69,6 +69,8 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
   const [statuses, setStatuses] = useState({
     register: { message: '', kind: '' },
     login: { message: '', kind: '' },
+    recover: { message: '', kind: '' },
+    password: { message: '', kind: '' },
     twofa: { message: '', kind: '' }
   });
   const [demoOtp, setDemoOtp] = useState(null);
@@ -83,6 +85,9 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
   const registerPasswordRef = useRef(null);
   const loginUsernameRef = useRef(null);
   const loginPasswordRef = useRef(null);
+  const recoverUsernameRef = useRef(null);
+  const changeCurrentPasswordRef = useRef(null);
+  const changeNewPasswordRef = useRef(null);
   const twofaCodeRef = useRef(null);
   const activeCaptureRef = useRef(null);
   const pendingAuthRef = useRef({ username: null, loginAttemptId: null });
@@ -429,6 +434,62 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
     showView('landing');
   };
 
+  const handleRecover = async (ev) => {
+    ev.preventDefault();
+    const username = recoverUsernameRef.current.value.trim();
+    if (!username) {
+      setStatus('recover', 'Enter your username first.', 'error');
+      return;
+    }
+
+    setStatus('recover', 'Clearing any stuck login state...');
+    try {
+      const { json } = await api('/users/unblock', { username });
+      if (json.status === 'unblocked') {
+        setStatus('recover', 'You can sign in again now. Change your password after you get in.', 'success');
+        if (loginUsernameRef.current) loginUsernameRef.current.value = username;
+        window.setTimeout(() => showView('login'), 1200);
+        return;
+      }
+      setStatus('recover', json.message || 'Could not unblock that account.', 'error');
+    } catch (err) {
+      setStatus('recover', `Network error: ${err.message}`, 'error');
+    }
+  };
+
+  const handleChangePassword = async (ev) => {
+    ev.preventDefault();
+    if (!activeUsername) {
+      setStatus('password', 'Sign in before changing your password.', 'error');
+      return;
+    }
+    const currentPassword = changeCurrentPasswordRef.current.value;
+    const newPassword = changeNewPasswordRef.current.value;
+    if (!currentPassword || !newPassword) {
+      setStatus('password', 'Fill in both password fields.', 'error');
+      return;
+    }
+
+    setStatus('password', 'Updating password...');
+    try {
+      const { json } = await api('/password/change', {
+        username: activeUsername,
+        current_password: currentPassword,
+        new_password: newPassword
+      });
+      if (json.status === 'password_changed') {
+        changeCurrentPasswordRef.current.value = '';
+        changeNewPasswordRef.current.value = '';
+        setStatus('password', 'Password changed. Please sign in again.', 'success');
+        window.setTimeout(() => handleLogout(), 900);
+        return;
+      }
+      setStatus('password', json.message || 'Could not change password.', 'error');
+    } catch (err) {
+      setStatus('password', `Network error: ${err.message}`, 'error');
+    }
+  };
+
   return (
     <>
       <div className="bg-gradient" aria-hidden="true"></div>
@@ -603,7 +664,7 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
             <p className="powered-by">
               <span className="powered-mark">◈</span>
               Auth genuinely powered by{' '}
-              <a href="https://github.com/" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/aryamanrtunjay/cadence" target="_blank" rel="noopener noreferrer">
                 <strong>Cadence</strong>
               </a>{' '}
               - the only working piece of technology in this entire product.
@@ -662,7 +723,7 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
                   ref={registerPasswordRef}
                 />
                 <ul className="field-hint">
-                  <li>At least 8 characters</li>
+                  <li>At least 16 characters</li>
                   <li>One uppercase letter (A–Z)</li>
                   <li>One lowercase letter (a–z)</li>
                   <li>One number (0–9)</li>
@@ -743,6 +804,9 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
               <p className="auth-switch">
                 No account yet? <a href="/register" onClick={routeTo('register')}>Start free trial</a>
               </p>
+              <p className="auth-switch">
+                Stuck or forgot? <a href="/recover" onClick={routeTo('recover')}>Unblock your account</a>
+              </p>
             </form>
 
             <div className="auth-aside">
@@ -756,6 +820,35 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
                 <span className="powered-mark">◈</span> Powered by Cadence
               </p>
             </div>
+          </div>
+        </section>
+
+        <section className="route route-auth" data-route-view="recover" hidden={view !== 'recover'}>
+          <div className="auth-card">
+            <a className="auth-back" href="/login" onClick={routeTo('login')}>← back to sign in</a>
+            <h1 className="auth-title">Recover access</h1>
+            <p className="auth-sub">Clear a stuck login, then sign in and change your password.</p>
+
+            <form className="auth-form" id="recover-form" autoComplete="off" noValidate onSubmit={handleRecover}>
+              <label className="field">
+                <span className="field-label">Username</span>
+                <input
+                  type="text"
+                  name="username"
+                  id="recover-username"
+                  placeholder="thought.leader.42"
+                  autoComplete="username"
+                  required
+                  ref={recoverUsernameRef}
+                />
+              </label>
+
+              <button type="submit" className="btn btn-primary btn-block">
+                Unblock account <span className="arrow">→</span>
+              </button>
+
+              <Status value={statuses.recover} />
+            </form>
           </div>
         </section>
 
@@ -816,6 +909,39 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
 
             <Enrollment payload={enrollment} />
 
+            <form className="auth-form" id="change-password-form" autoComplete="off" noValidate onSubmit={handleChangePassword}>
+              <label className="field">
+                <span className="field-label">Current password</span>
+                <input
+                  type="password"
+                  name="current-password"
+                  id="change-current-password"
+                  autoComplete="current-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  ref={changeCurrentPasswordRef}
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">New password</span>
+                <input
+                  type="password"
+                  name="new-password"
+                  id="change-new-password"
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  ref={changeNewPasswordRef}
+                />
+              </label>
+
+              <button type="submit" className="btn btn-primary btn-block">
+                Change password <span className="arrow">→</span>
+              </button>
+
+              <Status value={statuses.password} />
+            </form>
 
             <button type="button" className="btn btn-ghost btn-block" id="logout-btn" onClick={handleLogout}>
               Sign out

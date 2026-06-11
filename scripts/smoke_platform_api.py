@@ -14,19 +14,6 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-def sample_payload() -> dict[str, list[dict[str, float]]]:
-    return {
-        "keystrokes": [
-            {
-                "hold_time": 78.0 + (index % 4),
-                "flight_time": 38.0 + (index % 3),
-                "down_down": 116.0 + (index % 5),
-            }
-            for index in range(12)
-        ]
-    }
-
-
 def request_json(
     api_base: str,
     method: str,
@@ -81,12 +68,6 @@ def require(value: Any, message: str) -> Any:
     return value
 
 
-def assert_has_keys(payload: dict[str, Any], keys: tuple[str, ...], label: str) -> None:
-    missing = [key for key in keys if key not in payload]
-    if missing:
-        raise SystemExit(f"{label} response missing keys: {', '.join(missing)}")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -119,7 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     admin_token = require(args.admin_token, "Missing --admin-token or CADENCE_ADMIN_TOKEN.")
     run_id = str(int(time.time()))
     slug = f"{args.prefix}-{run_id}"
-    raw_data = sample_payload()
+    username = f"{slug}-user"
+    initial_password = "SmokePassword123!Initial"
+    changed_password = "SmokePassword123!Changed"
 
     health = request_json(args.api_base, "GET", "/health")
     require(health.get("status") == "ok", f"Unexpected /health response: {health}")
@@ -174,7 +157,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     api_key = approval["api_key"]["key"]
     api_key_id = approval["api_key"]["api_key_id"]
-    external_user_id = f"{slug}-user"
 
     registration_status = request_json(
         args.api_base,
@@ -191,53 +173,56 @@ def main(argv: list[str] | None = None) -> int:
         f"Registration status did not expose approved application: {registration_status}",
     )
 
-    enrollment_required = 1
-    enroll_response: dict[str, Any] = {}
-    for index in range(10):
-        enroll_response = request_json(
-            args.api_base,
-            "POST",
-            "/v1/enroll",
-            {
-                "external_user_id": external_user_id,
-                "raw_data": raw_data,
-                "source": "smoke",
-                "successful": True,
-                "quality_score": 1,
-                "flags": ["smoke"],
-            },
-            bearer_token=api_key,
-            origin=args.origin,
-            expected=(201,),
-        )
-        enrollment_required = int(enroll_response.get("enrollment_required") or enrollment_required)
-        if enroll_response.get("enrolled"):
-            break
-        if index + 1 >= enrollment_required:
-            break
-
-    require(enroll_response.get("enrolled"), f"User did not enroll: {enroll_response}")
-
-    score_response = request_json(
+    signup_response = request_json(
         args.api_base,
         "POST",
-        "/v1/score",
+        "/signup",
         {
-            "external_user_id": external_user_id,
-            "raw_data": raw_data,
-            "store_successful_sample": False,
+            "email": f"{slug}@example.com",
+            "username": username,
+            "password": initial_password,
         },
         bearer_token=api_key,
         origin=args.origin,
     )
-    assert_has_keys(
-        score_response,
-        ("score_request_id", "score", "confidence", "accepted", "match", "threshold", "reason"),
-        "/v1/score",
+    require(signup_response.get("status") == "signup_success", f"Signup failed: {signup_response}")
+
+    logout_response = request_json(
+        args.api_base,
+        "POST",
+        "/logout",
+        {"username": username},
+        bearer_token=api_key,
+        origin=args.origin,
     )
-    require(score_response.get("enrolled") is True, f"Score response not enrolled: {score_response}")
-    require(score_response.get("confidence") is not None, f"Score did not run model: {score_response}")
-    require(isinstance(score_response.get("match"), bool), f"Score match is not boolean: {score_response}")
+    require(logout_response.get("status") == "logged out", f"Logout failed: {logout_response}")
+
+    unblock_response = request_json(
+        args.api_base,
+        "POST",
+        "/users/unblock",
+        {"username": username},
+        bearer_token=api_key,
+        origin=args.origin,
+    )
+    require(unblock_response.get("status") == "unblocked", f"Unblock failed: {unblock_response}")
+
+    change_password_response = request_json(
+        args.api_base,
+        "POST",
+        "/password/change",
+        {
+            "username": username,
+            "current_password": initial_password,
+            "new_password": changed_password,
+        },
+        bearer_token=api_key,
+        origin=args.origin,
+    )
+    require(
+        change_password_response.get("status") == "password_changed",
+        f"Password change failed: {change_password_response}",
+    )
 
     usage_response = request_json(
         args.api_base,
@@ -247,9 +232,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     usage = usage_response["usage"]
     require(usage["api_keys"]["total"] >= 1, f"Usage did not include generated key: {usage}")
-    require(usage["end_users"]["total"] >= 1, f"Usage did not include generated end user: {usage}")
-    require(usage["typing_samples"]["successful"] >= enrollment_required, f"Usage did not include enrollment samples: {usage}")
-    require(usage["score_requests"]["total"] >= 1, f"Usage did not include score request: {usage}")
 
     if not args.keep_key:
         request_json(
@@ -265,11 +247,10 @@ def main(argv: list[str] | None = None) -> int:
         "registration_status": registration_status["registration"]["status"],
         "application_id": approval["application"]["application_id"],
         "api_key_id": api_key_id,
-        "external_user_id": external_user_id,
-        "score_request_id": score_response["score_request_id"],
-        "usage_score_requests": usage["score_requests"]["total"],
-        "match": score_response["match"],
-        "confidence": score_response["confidence"],
+        "username": username,
+        "signup_user_id": signup_response["user_id"],
+        "password_changed": change_password_response["status"] == "password_changed",
+        "api_keys_seen": usage["api_keys"]["total"],
         "key_revoked": not args.keep_key,
     }, indent=2, sort_keys=True))
     return 0

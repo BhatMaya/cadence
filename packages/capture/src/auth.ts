@@ -87,6 +87,30 @@ export interface LogoutResponse {
   readonly message?: string;
 }
 
+export interface ChangePasswordRequest {
+  username: string;
+  current_password: string;
+  new_password: string;
+}
+
+export interface ChangePasswordResponse {
+  readonly status: 'password_changed' | 'user not found' | 'error' | string;
+  readonly user_id?: string;
+  readonly message?: string;
+}
+
+export interface UnblockUserRequest {
+  username?: string;
+  user_id?: string;
+}
+
+export interface UnblockUserResponse {
+  readonly status: 'unblocked' | 'user not found' | 'error' | string;
+  readonly user_id?: string;
+  readonly current_login_status?: string;
+  readonly message?: string;
+}
+
 export class CadenceAuthClient {
   private readonly apiBaseUrl: string;
   private readonly apiKey?: string;
@@ -133,6 +157,20 @@ export class CadenceAuthClient {
   logout(request: LogoutRequest): Promise<LogoutResponse> {
     requireText('CadenceAuthClient.logout', 'username', request.username);
     return this.post('/logout', request);
+  }
+
+  changePassword(request: ChangePasswordRequest): Promise<ChangePasswordResponse> {
+    requireText('CadenceAuthClient.changePassword', 'username', request.username);
+    requireText('CadenceAuthClient.changePassword', 'current_password', request.current_password);
+    requireText('CadenceAuthClient.changePassword', 'new_password', request.new_password);
+    return this.post('/password/change', request);
+  }
+
+  unblockUser(request: UnblockUserRequest): Promise<UnblockUserResponse> {
+    if (!request.username && !request.user_id) {
+      throw new TypeError('CadenceAuthClient.unblockUser: username or user_id is required');
+    }
+    return this.post('/users/unblock', request);
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
@@ -209,6 +247,8 @@ export interface PasswordAuthController {
   verifyCode(request: VerifyCodeRequest): Promise<VerifyCodeResponse>;
   resendCode(request: ResendCodeRequest): Promise<ResendCodeResponse>;
   logout(request?: LogoutRequest): Promise<LogoutResponse>;
+  changePassword(request: ChangePasswordRequest): Promise<ChangePasswordResponse>;
+  unblockUser(request?: UnblockUserRequest): Promise<UnblockUserResponse>;
   on<E extends CaptureEvent['type']>(
     event: E,
     handler: (payload: Extract<CaptureEvent, { type: E }>) => void
@@ -310,6 +350,14 @@ export function createPasswordAuthController(
 
     logout(request?: LogoutRequest) {
       return client.logout(request ?? { username: currentUsername() });
+    },
+
+    changePassword(request: ChangePasswordRequest) {
+      return client.changePassword(request);
+    },
+
+    unblockUser(request?: UnblockUserRequest) {
+      return client.unblockUser(request ?? { username: currentUsername() });
     },
 
     on(event, handler) {

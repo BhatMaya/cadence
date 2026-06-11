@@ -37,6 +37,18 @@ export class CadenceAuthClient {
         requireText('CadenceAuthClient.logout', 'username', request.username);
         return this.post('/logout', request);
     }
+    changePassword(request) {
+        requireText('CadenceAuthClient.changePassword', 'username', request.username);
+        requireText('CadenceAuthClient.changePassword', 'current_password', request.current_password);
+        requireText('CadenceAuthClient.changePassword', 'new_password', request.new_password);
+        return this.post('/password/change', request);
+    }
+    unblockUser(request) {
+        if (!request.username && !request.user_id) {
+            throw new TypeError('CadenceAuthClient.unblockUser: username or user_id is required');
+        }
+        return this.post('/users/unblock', request);
+    }
     async post(path, body) {
         const headers = { 'Content-Type': 'application/json' };
         if (this.apiKey)
@@ -140,6 +152,12 @@ export function createPasswordAuthController(options) {
         },
         logout(request) {
             return client.logout(request ?? { username: currentUsername() });
+        },
+        changePassword(request) {
+            return client.changePassword(request);
+        },
+        unblockUser(request) {
+            return client.unblockUser(request ?? { username: currentUsername() });
         },
         on(event, handler) {
             return capture.on(event, handler);

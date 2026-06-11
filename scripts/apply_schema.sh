@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Apply backend/schema.sql to a local or production Supabase Postgres database.
+# Apply the legacy backend/schema.sql bootstrap to an isolated local database.
 #
 # Usage:
-#   DATABASE_URL=postgres://... bash scripts/apply_schema.sh
-#   SUPABASE_DB_URL=postgres://... bash scripts/apply_schema.sh
-#   bash scripts/apply_schema.sh  # falls back to `supabase status -o env`
+#   CADENCE_APPLY_LOCAL_SCHEMA=1 bash scripts/setup.sh
+#   CADENCE_ALLOW_LEGACY_SCHEMA_APPLY=1 DATABASE_URL=postgres://... bash scripts/apply_schema.sh
 
 set -euo pipefail
 
@@ -59,7 +58,12 @@ apply_with_container() {
 
 [ -f "$SCHEMA_FILE" ] || fail "Schema file not found: $SCHEMA_FILE"
 
-bold "Applying Cadence schema"
+if [ "${CADENCE_APPLY_LOCAL_SCHEMA:-0}" != "1" ] \
+    && [ "${CADENCE_ALLOW_LEGACY_SCHEMA_APPLY:-0}" != "1" ]; then
+    fail "backend/schema.sql is a legacy local bootstrap. Set CADENCE_APPLY_LOCAL_SCHEMA=1 for local setup, or CADENCE_ALLOW_LEGACY_SCHEMA_APPLY=1 if you intentionally want this script."
+fi
+
+bold "Applying legacy Cadence schema"
 DB_URL="$(resolve_db_url)"
 if [ -z "$DB_URL" ]; then
     fail "Set DATABASE_URL or SUPABASE_DB_URL, or run a local Supabase stack."
