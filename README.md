@@ -28,7 +28,7 @@ Docker. The application code is unchanged; it just talks to
 
 | Tool | Purpose | Install |
 | --- | --- | --- |
-| Python 3.11+ | backend runtime | `brew install python` / your distro's package |
+| Python 3.12 | backend runtime (`backend/.python-version` pins 3.12.10) | `brew install python@3.12` / your distro's package |
 | Docker | hosts the local Supabase stack | https://docs.docker.com/get-docker/ |
 | Node.js/npm | frontend runtime and Supabase CLI fallback | https://nodejs.org/ |
 | Supabase CLI | manages the local stack | Optional if `npx supabase` works; otherwise install from https://supabase.com/docs/guides/cli |
@@ -77,7 +77,8 @@ npm run dev
 Open <http://localhost:3000>, register, and sign in. The Synergyze demo owns
 the browser UI, then sends requests through its Next.js proxy route to the
 backend's app-scoped `/signup`, `/authenticate`, `/code_verification`,
-`/resend_code`, and `/logout` endpoints.
+`/resend_code`, `/logout`, `/password/change`, and `/users/unblock`
+endpoints.
 
 ### Useful commands
 
@@ -132,10 +133,10 @@ GitHub worktree sync are in `docs/deployment.md`.
 
 ## App-scoped API quickstart
 
-Cadence can also run as a platform API for other applications. An
+Cadence can also run as a platform API for other applications. A
 confirmed developer account creates an application, gets a server-side
-API key, and the integrating app sends typing samples captured by the
-npm package to `/v1/enroll` and `/v1/score`.
+API key, and the integrating app calls the app-scoped password auth
+routes with typing samples captured by the npm package.
 
 Open `/developer`, create a developer account, confirm the Supabase email,
 then sign in and register an application. Cadence creates the application
@@ -190,6 +191,14 @@ const result = await cadence.authenticate({
 if (result.status === 'accepted') {
   console.log('Logged in');
 }
+
+await cadence.changePassword({
+  username: 'alice',
+  current_password: 'correct horse battery staple',
+  new_password: 'much better horse battery staple!2'
+});
+
+await cadence.unblockUser({ username: 'alice' });
 ```
 
 See `backend/ENDPOINTS.txt` for the full API notes,
@@ -199,10 +208,21 @@ checklist.
 
 ## Project layout details
 
-- **`backend/app.py`** — Flask routes for `/signup`, `/authenticate`,
-  `/logout`, `/code_verification`, `/resend_code`, `/health`,
-  `/model/health`, and the `/v1/*` platform API. See
-  `backend/ENDPOINTS.txt` for the full contract.
+- **`backend/app.py`** — Flask application setup, shared configuration,
+  Supabase clients, rate limits, CORS, and route-section loading.
+- **`backend/auth_flow_endpoints.py`** — app-scoped user auth routes:
+  `/signup`, `/authenticate`, `/logout`, `/code_verification`,
+  `/resend_code`, `/password/change`, `/users/unblock`, and the email
+  recovery/reporting pages.
+- **`backend/developer_portal_endpoints.py`** — developer signup/login,
+  self-serve app creation, API key management, and manual app
+  registration review routes.
+- **`backend/platform_endpoints.py`** — health checks, admin
+  app/key operations, app threshold changes, and app-scoped user status
+  support endpoints.
+- **`backend/internal_helpers.py`** — shared auth-flow helpers for OTP
+  email, fraud/unblock links, password policy, replay detection,
+  login-attempt creation, and model scoring glue.
 - **`backend/model_service.py`** — wraps the Keras siamese model;
   fetches a user's prior successful samples from
   `public.login_attempts`, normalizes both sides, runs them through the
@@ -212,9 +232,9 @@ checklist.
   features, and exposes typed Cadence auth helpers. The frontend imports
   the prebuilt dist from `frontend/vendor/`.
 - **`frontend/`** — Next.js app with client-side routes
-  (`/`, `/register`, `/login`, `/twofa`, `/dashboard`). Synergyze browser
-  requests go through `/api/synergyze/*`; that server-side route forwards
-  to `SYNERGYZE_API_BASE` and attaches `CADENCE_API_KEY` for app-scoped
-  backend routes.
+  (`/`, `/register`, `/login`, `/recover`, `/twofa`, `/dashboard`).
+  Synergyze browser requests go through `/api/synergyze/*`; that
+  server-side route forwards to `SYNERGYZE_API_BASE` and attaches
+  `CADENCE_API_KEY` for app-scoped backend routes.
 - **`model.py` / `train.py`** — the model architecture and training
   loop. Pretrained weights live in `models/`.

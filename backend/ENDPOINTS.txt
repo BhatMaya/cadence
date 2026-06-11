@@ -132,7 +132,6 @@ Purpose: Verify the one-time code sent to user's email to complete login
 
 Request Body:
 {
-  "username": "string (required)",
   "code": "string (required) - 6-digit code from email",
   "login_attempt_id": "string (required) - returned from /authenticate response"
 }
@@ -161,9 +160,14 @@ Responses:
   } - 200
   If enrolled=false, the frontend should collect another enrollment sample.
   If enrolled=true, the user has completed enrollment and is logged in.
+
+- Unlock code verified successfully:
+  {"status": "unlocked"} - 200
+  This clears current_login_status and failed_password_attempts, but does not
+  sign the user in.
   
 - Error (missing field):
-  {"status": "error", "message": "missing username" | "missing code" | "missing login_attempt_id"} - 400
+  {"status": "error", "message": "missing code" | "missing login_attempt_id"} - 400
 
 
 POST /resend_code
@@ -172,7 +176,6 @@ Purpose: Resend a 2FA code to the user's email. Generates a new code and resets 
 
 Request Body:
 {
-  "username": "string (required)",
   "login_attempt_id": "string (required) - from the pending 2FA attempt"
 }
 
@@ -184,10 +187,11 @@ Responses:
   {"status": "invalid attempt"} - 200
   
 - Error (missing field):
-  {"status": "error", "message": "missing username" | "missing login_attempt_id"} - 400
+  {"status": "error", "message": "missing login_attempt_id"} - 400
 
 Note: This endpoint generates a fresh code with a new 5-minute expiration and resets
-the attempt_count to 0, allowing the user another 3 attempts.
+the attempt_count to 0, allowing the user another 3 attempts. The email includes
+links to report a fraudulent login or clear the pending login state.
 
 
 POST /logout
@@ -207,6 +211,92 @@ Responses:
   {"status": "user not found"} - 200
 - Error (missing field):
   {"status": "error", "message": "missing username"} - 400
+
+
+POST /password/change
+---------------------
+Purpose: Change an app-scoped user's Supabase Auth password after verifying
+         the current password. Also signs the user out and clears the
+         consecutive wrong-password counter.
+
+Headers:
+  Authorization: Bearer <sk_live_...>
+
+Request Body:
+{
+  "username": "string (required)",
+  "current_password": "string (required)",
+  "new_password": "string (required)"
+}
+
+Responses:
+- Password changed:
+  {"status": "password_changed", "user_id": "uuid"} - 200
+- User not found:
+  {"status": "user not found"} - 200
+- Invalid current password:
+  {"status": "error", "message": "invalid credentials"} - 401
+- User belongs to another application:
+  {"status": "forbidden", "message": "forbidden"} - 403
+- Invalid new password:
+  {"status": "error", "message": "Password must ..."} - 400
+
+
+POST /users/unblock
+-------------------
+Purpose: Clear a stuck current_login_status for an app-scoped user. This is a
+         support/recovery operation; it does not sign the user in and does not
+         change failed_password_attempts.
+
+Headers:
+  Authorization: Bearer <sk_live_...>
+
+Request Body:
+{
+  "username": "string (optional if user_id is provided)",
+  "user_id": "uuid (optional if username is provided)"
+}
+
+Responses:
+- User unblocked:
+  {
+    "status": "unblocked",
+    "user_id": "uuid",
+    "current_login_status": "not logged in"
+  } - 200
+- User not found:
+  {"status": "user not found"} - 200
+- User belongs to another application:
+  {"status": "forbidden", "message": "forbidden"} - 403
+- Missing identifier:
+  {"status": "error", "message": "missing username or user_id"} - 400
+
+
+GET /unblock-login/<login_attempt_id>
+POST /unblock-login/<login_attempt_id>
+-------------------------------------
+Purpose: Email-link recovery flow. GET renders a confirmation page. POST
+         clears the pending login state and deletes the matching OTP row so
+         the user can start over.
+
+Responses:
+- Unblocked:
+  HTML page saying the pending login has been cleared - 200
+- Stale/unknown login attempt:
+  HTML page saying the link is no longer valid - 404
+
+
+GET /report-fraud/<login_attempt_id>
+POST /report-fraud/<login_attempt_id>
+------------------------------------
+Purpose: Email-link fraud reporting flow. GET renders a confirmation page.
+         POST marks the login attempt as fraud, clears the user's current
+         login status, deletes the matching OTP row, increments the source IP
+         offense counter, and prompts the user to change their password.
+
+Responses:
+- Fraud reported:
+  HTML page with a password-change prompt - 200
 
 
 3. PLATFORM API ENDPOINTS
@@ -515,30 +605,6 @@ Response:
       "active": 1,
       "revoked": 1,
       "last_used_at": "timestamp or null"
-    },
-    "end_users": {
-      "total": 120,
-      "enrolled": 96
-    },
-    "typing_samples": {
-      "total": 560,
-      "successful": 520,
-      "enrollment": 500,
-      "score_stored": 20
-    },
-    "score_requests": {
-      "total": 430,
-      "accepted": 390,
-      "rejected": 40,
-      "acceptance_rate": 0.9069767441860465,
-      "avg_score_duration_ms": 18.4,
-      "p95_score_duration_ms": 42.1,
-      "reason_counts": {
-        "accepted": 390,
-        "low_confidence": 35,
-        "not_enrolled": 5
-      },
-      "last_scored_at": "timestamp or null"
     }
   }
 } - 200
@@ -555,120 +621,16 @@ Responses:
   {"status": "not_found", "message": "API key not found"} - 404
 
 
-POST /v1/end-users
-------------------
-Purpose: Create or fetch an application-scoped end user.
-
-Request Body:
-{
-  "external_user_id": "string (required)",
-  "threshold": 0.5,
-  "metadata": {"plan": "pro"}
-}
-
-Response:
-{
-  "status": "ok",
-  "end_user": {...},
-  "enrolled": false,
-  "enrollment_count": 0,
-  "enrollment_required": 5,
-  "enrollment_samples_needed": 5
-} - 200
-
-
-GET /v1/end-users/<external_user_id>
------------------------------------
-Purpose: Fetch enrollment state for an application-scoped end user.
-
-Responses:
-- Found:
-  {"status": "ok", "end_user": {...}, ...enrollment fields...} - 200
-- Not found:
-  {"status": "not_found", "message": "end user not found"} - 404
-
-
-POST /v1/enroll
----------------
-Purpose: Store a successful typing sample for future model comparison.
-
-Request Body:
-{
-  "external_user_id": "string (required)",
-  "raw_data": {
-    "events": [
-      {"type": "down" | "up", "code": "string", "t": float}
-    ]
-  },
-  "source": "enrollment",
-  "successful": true,
-  "quality_score": 0.93,
-  "flags": []
-}
-
-raw_data may also be {"keystrokes": [...]} or a bare list of keystroke
-objects with the timing fields named by the active model metrics file.
-
-Response:
-{
-  "status": "enrolled",
-  "end_user_id": "uuid",
-  "external_user_id": "string",
-  "enrolled": false,
-  "enrollment_count": 1,
-  "enrollment_required": 5,
-  "enrollment_samples_needed": 4
-} - 201
-
-
-POST /v1/score
---------------
-Purpose: Score a fresh typing sample against the end user's enrollment
-         samples.
-
-Request Body:
-{
-  "external_user_id": "string (required)",
-  "raw_data": {"events": [...]},
-  "threshold": 0.5,
-  "store_successful_sample": false
-}
-
-Responses:
-- Not enrolled yet:
-  {
-    "status": "ok",
-    "score": null,
-    "confidence": null,
-    "accepted": false,
-    "match": false,
-    "reason": "not_enrolled",
-    ...enrollment fields...
-  } - 200
-- Scored:
-  {
-    "status": "ok",
-    "score_request_id": "uuid",
-    "score": 0.82,
-    "confidence": 0.82,
-    "accepted": true,
-    "match": true,
-    "threshold": 0.5,
-    "reason": "accepted",
-    ...enrollment fields...
-  } - 200
-- Unauthorized or disallowed origin:
-  {"status": "unauthorized" | "forbidden", "message": "..."} - 401/403
-
-
 4. LOGIN STATUS FIELD
 ================================================================================
 
 The user_profiles table has a "current_login_status" column with values:
-- "logged in"    : User successfully authenticated. /logout clears this back to null.
+- "logged in"    : User successfully authenticated. /logout clears this back to "not logged in".
 - "pending 2fa"  : ML score rejected, 2FA code sent, awaiting verification
 - "locked"       : Account locked due to 3 failed 2FA attempts
-- null           : Initial state, logged out, or enrollment still needs more samples
+- "password_locked": Account locked after too many wrong passwords; code verification unlocks it
+- "not logged in" : Logged out, unblocked, or enrollment still needs more samples
+- null           : Legacy/uninitialized state; treated like logged out by the auth flow
 
 
 5. REQUEST/RESPONSE FLOW EXAMPLE
@@ -678,6 +640,7 @@ Step 1: Keystroke Login Attempt
 POST /authenticate
 {
   "username": "alice",
+  "password": "correct horse battery staple",
   "raw_data": {"keystrokes": [...]}
 }
 
@@ -697,6 +660,10 @@ Database Updates:
 - login_attempt record created
 - _2fa record created with OTP hash and attempt_count=0
 - Email sent to alice@example.com
+  The email contains:
+  - the 6-digit code
+  - a link to /unblock-login/<login_attempt_id> for clearing a stuck pending login
+  - a link to /report-fraud/<login_attempt_id> for reporting a login the user did not request
 
 
 Step 2: User enters code from email
@@ -717,7 +684,7 @@ Response (success):
 }
 
 Database Updates:
-- current_login_status remains null until 5 successful samples are collected
+- current_login_status remains "not logged in" until 5 successful samples are collected
 - _2fa record deleted (can't reuse code)
 - login_attempts marked successful_login=True
 
@@ -748,7 +715,24 @@ Response:
 {"status": "logged out"}
 
 Database Updates:
-- current_login_status set to null
+- current_login_status set to "not logged in"
+
+
+Step 5: User changes password after a suspicious login
+POST /password/change
+{
+  "username": "alice",
+  "current_password": "correct horse battery staple",
+  "new_password": "a much better password!2"
+}
+
+Response:
+{"status": "password_changed", "user_id": "uuid"}
+
+Database/Auth Updates:
+- Supabase Auth password updated
+- current_login_status set to "not logged in"
+- failed_password_attempts reset to 0
 
 
 6. RETRY LOGIC
@@ -786,25 +770,28 @@ Score Decision:
 ================================================================================
 
 user_profiles table:
+- user_id: Supabase Auth user ID
 - username: unique identifier for login
 - email: for 2FA code delivery
 - threshold: ML similarity threshold for this user
-- current_login_status: "logged in" | "pending 2fa" | "locked" | null
+- current_login_status: "logged in" | "not logged in" | "pending 2fa" | "locked" | "password_locked" | null
 - number_login_attempts: counter for tracking login history
-- Additional fields as needed
+- failed_password_attempts: consecutive wrong-password counter
+- application_id: application that owns this end-user profile
 
 login_attempts table:
 - login_attempt_id: unique identifier for this login session
-- username: which user attempted login
+- user_id: which user attempted login
 - login_number: sequence number for this user
 - two_fa_invoked: boolean, set when 2FA is required
-- successful_login: boolean, set when login completed successfully
+- successful_login: "successful" when login completed, "fraud" when reported, null while pending
 - confidence_score: ML similarity score
 - raw_data: the keystroke data submitted
+- events_hash: replay-detection hash of the raw event stream
+- ip_address: source IP used by fraud-reporting offense tracking
 
 _2fa table:
 - login_attempt_id: links to login_attempts
-- username: which user this code is for
 - otp_hash: SHA256 hash of the 6-digit code
 - expires_at: timestamp when code expires (5 minutes)
 - attempt_count: counter for verification attempts (max 3)
@@ -821,21 +808,8 @@ api_keys table:
 - key_hash: SHA-256 hash of the full key
 - revoked_at/last_used_at: key lifecycle and audit fields
 
-end_users table:
-- end_user_id: Cadence-scoped end-user ID
-- external_user_id: integrating application's user ID
-- threshold: optional per-user model decision threshold
-- metadata: application-owned JSON object
-
-typing_samples table:
-- raw_data: captured Sample events or precomputed keystroke features
-- successful: whether this sample can be used for enrollment
-- quality_score/confidence_score/flags: capture and model metadata
-
-score_requests table:
-- raw_data: submitted scoring sample
-- score/threshold/accepted/reason: model decision audit trail
-- score_duration_ms: request-local scoring latency used for operator dashboards
-- enrolled/enrollment_count/enrollment_required: enrollment state at scoring time
+blocked_ips table:
+- ip_address: reported source IP
+- offense_count: number of fraud reports for this IP
 
 ================================================================================
