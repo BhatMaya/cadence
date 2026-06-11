@@ -2,13 +2,14 @@
 # Cadence local setup. Brings up a self-contained dev stack:
 #   - Supabase local (Postgres + GoTrue) via the Supabase CLI
 #   - Python venv with backend deps
-#   - Schema applied
+#   - Optional local-only schema bootstrap
 #   - backend/.env populated with the local Supabase URL + service key
 #
 # Re-runnable. Safe to invoke from a fresh checkout or after pulling.
 #
 # Usage:
 #   bash scripts/setup.sh
+#   CADENCE_APPLY_LOCAL_SCHEMA=1 bash scripts/setup.sh
 
 set -euo pipefail
 
@@ -29,11 +30,11 @@ require() {
 }
 
 bold "[1/5] Checking prerequisites"
-require python3 "Install Python 3.11 or 3.12. (3.13 may lack TensorFlow wheels and force a long source build.)"
+require python3 "Install Python 3.12. Python 3.13 does not have compatible TensorFlow wheels for this project."
 PY_VERSION="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 case "$PY_VERSION" in
-    3.11|3.12) ;;
-    *) info "warning: python $PY_VERSION detected; tensorflow-cpu wheels are most reliable on 3.11 / 3.12." ;;
+    3.12) ;;
+    *) info "warning: python $PY_VERSION detected; use Python 3.12 for the pinned backend dependencies." ;;
 esac
 require docker "Install Docker Desktop or Docker Engine, then make sure the daemon is running."
 docker info >/dev/null 2>&1 || fail "Docker daemon isn't responding. Start Docker and re-run."
@@ -88,9 +89,15 @@ DB_URL="${DB_URL:?supabase status did not return DB_URL}"
 API_URL="${API_URL:?supabase status did not return API_URL}"
 SERVICE_ROLE_KEY="${SERVICE_ROLE_KEY:?supabase status did not return SERVICE_ROLE_KEY}"
 
-bold "[4/5] Applying schema"
-DATABASE_URL="$DB_URL" CADENCE_SCHEMA_FILE="$SCHEMA_FILE" bash "$REPO_ROOT/scripts/apply_schema.sh"
-ok "schema applied"
+bold "[4/5] Local schema bootstrap"
+if [ "${CADENCE_APPLY_LOCAL_SCHEMA:-0}" = "1" ]; then
+    DATABASE_URL="$DB_URL" CADENCE_SCHEMA_FILE="$SCHEMA_FILE" bash "$REPO_ROOT/scripts/apply_schema.sh"
+    ok "schema applied to the local Supabase database"
+else
+    info "skipping backend/schema.sql; the provisioned Supabase project schema is maintained in the SQL editor"
+    info "set CADENCE_APPLY_LOCAL_SCHEMA=1 only for an isolated local database reset"
+    ok "schema step skipped"
+fi
 
 bold "[5/5] Writing $ENV_FILE"
 # Resend isn't needed locally — demo mode bypasses the email send and

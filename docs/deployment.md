@@ -19,7 +19,7 @@ Required manual values in Render:
 - `CADENCE_CORS_ORIGINS`
 - `RESEND_KEY`
 - `RESEND_FROM_EMAIL`
-- `DATABASE_URL` for schema and retention jobs
+- `DATABASE_URL` for retention jobs
 
 Operational settings:
 
@@ -28,11 +28,9 @@ Operational settings:
 - Confirm `CADENCE_RATE_LIMIT_STORAGE_URI` is populated from
   `cadence-rate-limit`.
 - Confirm the health check path is `/health`.
-- Run schema changes before deploying backend code that depends on them:
-
-  ```bash
-  DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
-  ```
+- Apply schema changes in the Supabase SQL editor before deploying
+  backend code that depends on them. `backend/schema.sql` is a legacy
+  local bootstrap file, not the production schema source of truth.
 
 ## Frontend: Vercel
 
@@ -67,7 +65,7 @@ After deployment, open:
 3. Run `bash scripts/check_deployments_synced.sh`.
 4. Commit and push the source, backend deployment, and frontend deployment
    worktrees.
-5. Apply schema changes to production.
+5. Apply any required schema changes in the Supabase SQL editor.
 6. Let Render and Vercel deploy from their GitHub deployment repos.
 7. Verify the frontend is publicly reachable:
 

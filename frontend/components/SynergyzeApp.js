@@ -664,7 +664,7 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
             <p className="powered-by">
               <span className="powered-mark">◈</span>
               Auth genuinely powered by{' '}
-              <a href="https://github.com/" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/aryamanrtunjay/cadence" target="_blank" rel="noopener noreferrer">
                 <strong>Cadence</strong>
               </a>{' '}
               - the only working piece of technology in this entire product.
@@ -723,7 +723,7 @@ export default function SynergyzeApp({ initialRoute = 'landing' }) {
                   ref={registerPasswordRef}
                 />
                 <ul className="field-hint">
-                  <li>At least 8 characters</li>
+                  <li>At least 16 characters</li>
                   <li>One uppercase letter (A–Z)</li>
                   <li>One lowercase letter (a–z)</li>
                   <li>One number (0–9)</li>

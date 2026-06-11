@@ -10,12 +10,9 @@ are pushed.
    `@cadence-auth/cadence`.
 2. Make sure the machine that will publish has npm access to
    `@cadence-auth/cadence`.
-3. Provision production Supabase and apply the schema:
-
-   ```bash
-   DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
-   ```
-
+3. Provision production Supabase and apply any required schema changes in
+   the Supabase SQL editor. `backend/schema.sql` is a legacy local
+   bootstrap file and is not the production source of truth.
 4. Configure backend secrets from `backend/.env.example`, including
    `DATABASE_URL`, `CADENCE_ADMIN_TOKEN`, `CADENCE_RSA_PRIVATE_KEY`,
    `RESEND_FROM_EMAIL`, `CADENCE_CORS_ORIGINS`, and
@@ -56,11 +53,8 @@ are pushed.
 
 5. Commit and push the GitLab source tree, the backend deployment tree,
    and the frontend deployment tree.
-6. Apply any production schema changes before deploying backend code:
-
-   ```bash
-   DATABASE_URL=<postgres-url> bash scripts/apply_schema.sh
-   ```
+6. Apply any production schema changes in the Supabase SQL editor before
+   deploying backend code that depends on them.
 
 7. Publish the npm package after tests pass and the desired version is
    final:
@@ -104,9 +98,8 @@ generated key unless `--keep-key` is set.
 
 ## Rollback notes
 
-- Backend schema changes are written to be idempotent, but rollback
-  should usually deploy the prior backend code rather than dropping
-  columns.
+- Production schema changes are managed in Supabase. Rollback should
+  usually deploy the prior backend code rather than dropping columns.
 - API keys are only shown once. If a partner loses a key after rollback,
   create a new key and revoke the old one.
 - npm versions are immutable. Publish a new patch version instead of
